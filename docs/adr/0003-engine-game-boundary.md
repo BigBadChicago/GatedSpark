@@ -122,6 +122,24 @@ there are players. The thresholds are provisional and the module says so.
 | Nothing in the worker reads a clock | structural: no time source is imported, and `BandOutcome` records seeds rather than durations |
 | Two clue sets have equal bytes exactly when they are equal | `Clues::canonical_bytes`, with lengths before contents so the encoding cannot be ambiguous |
 
+### The validation report (M4, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| A complete report is publishable, so the tests below are not vacuous | `validation_report::a_complete_report_is_publishable` |
+| A report that asked nothing refuses rather than defaulting to yes | `validation_report::a_report_with_no_queries_refuses_rather_than_defaulting_to_yes` |
+| An undecided query is never a pass, at the report layer as well as the gate | `validation_report::an_undecided_query_is_not_a_pass` |
+| An undecided query stays findable in a report refused for some other reason | `validation_report::an_undecided_query_is_still_findable_in_a_report_refused_for_another_reason` |
+| A decisive wrong answer is not recorded as an undecided one | `validation_report::a_puzzle_with_two_answers_is_not_publishable` |
+| A witness the engine refused blocks publication | `validation_report::a_witness_the_engine_refused_is_not_publishable` |
+| A witness never replayed also blocks it, distinctly from one refused | `validation_report::a_witness_never_replayed_is_not_publishable_either` |
+| No content id means nothing can be published | `validation_report::a_report_with_no_content_id_is_not_publishable` |
+| A missing difficulty measurement is not a zero | `validation_report::a_missing_measurement_is_not_a_zero` |
+| A puzzle the game grades into no level is recorded as ungraded, not given one | `validation_report::an_ungraded_puzzle_is_recorded_as_ungraded` |
+| The encoding a uniqueness claim is relative to is recorded | `validation_report::the_encoding_a_uniqueness_claim_is_relative_to_is_recorded` |
+| The report does not re-decide publication | structural: `publishable` calls `verification::decide`, so the report and the gate are one judgement |
+| The report reads no clock | structural: there is no timestamp field, so a stored record cannot depend on the reader's clock |
+
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
 | Claim | Enforcing test |
