@@ -93,9 +93,16 @@ every non-Windows machine, CI included.
 
 **A wrapper script in the repository** that calls `cargo +<pinned channel>-x86_64-pc-windows-gnu`.
 Written first, then dropped in favour of the setting above. It needs no one-time setup and touches
-nothing outside the repository, which is genuinely better in one respect. It loses on two: every
-command has to go through the wrapper, so a plain `cargo build` from an editor or rust-analyzer
-still fails, and it was never run on a Windows machine, while the setting was.
+nothing outside the repository, which is genuinely better in one respect.
+
+It was also *not* untested, and an earlier draft of this ADR said it was. It ran on a
+`windows-latest` runner in CI and passed the full suite there. What it was never run on is a
+machine with no Visual Studio — and so was nothing else in CI, which is the limit recorded below.
+So the honest comparison is narrower than "tested versus untested": both approaches are proven on a
+runner that has Visual Studio, and only the default-host setting is proven on a machine that does
+not. What decides it is the remaining defect: every command has to go through the wrapper, so a
+plain `cargo build` from an editor or rust-analyzer still fails with the original linker error, on
+exactly the machines the change exists for.
 
 **`RUSTUP_TOOLCHAIN=...-x86_64-pc-windows-gnu` on each command.** The same escape hatch the README
 already documents for blocked networks. Works, but has to be remembered on every command, and
