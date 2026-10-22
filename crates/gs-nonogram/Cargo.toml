@@ -1,0 +1,13 @@
+[package]
+name = "gs-nonogram"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Nonogram puzzle family: rules, clue derivation, line solver and constraint encoding."
+
+[lints]
+workspace = true
+
+[dependencies]
+gs-core = { path = "../gs-core" }

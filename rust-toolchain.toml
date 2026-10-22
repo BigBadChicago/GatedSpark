@@ -1,0 +1,5 @@
+# Pinned so that "reproducible releases" (architecture plan, design principles) is
+# a property of the repo and not of whatever is installed on a developer's machine.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
