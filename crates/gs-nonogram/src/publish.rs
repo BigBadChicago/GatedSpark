@@ -7,9 +7,10 @@
 //!
 //! # The solver is passed in, not reached for
 //!
-//! [`Verifier`] is a trait and this crate implements none of it. Running a solver
-//! means launching a program, which belongs to whatever is driving the pipeline
-//! rather than to a puzzle family. Two things follow and both are deliberate:
+//! [`Verifier`] is a trait, defined in the core, and this crate implements none of it.
+//! Running a solver means launching a program, which belongs to whatever is driving
+//! the pipeline rather than to a puzzle family; the real implementation is in
+//! `gs-solver`. Two things follow and both are deliberate:
 //!
 //! * This crate cannot accidentally become a solver, or quietly answer its own
 //!   questions. It has no way to produce an [`Outcome`] except by being handed one.
@@ -31,23 +32,16 @@ use gs_core::ruleset::Ruleset;
 use gs_core::state::State;
 use gs_core::verification::{Outcome, Query};
 
+/// Re-exported from the core, where it now lives: an SMT-LIB2 query is a string and
+/// the trait says nothing about Nonogram. See [`gs_core::verification::Verifier`] for
+/// the rule it carries, which is that a solver that could not answer must say
+/// [`Outcome::Unknown`] and never `Unsat`.
+pub use gs_core::verification::Verifier;
+
 use crate::generate::Candidate;
 use crate::rules::Nonogram;
 use crate::smtlib::{solvability_query, uniqueness_query, EncodeError};
 use crate::solve::{solve, Budget, Solved};
-
-/// Something that can answer an SMT-LIB2 query.
-///
-/// Returning [`Outcome::Unknown`] is a legitimate answer and the implementation is
-/// expected to use it for a timeout, a crash, or anything it could not parse. What it
-/// must never do is guess: an implementation that returned `Unsat` because a solver
-/// failed to start would turn a missing dependency into a proof.
-pub trait Verifier {
-    /// A name for the report, such as the solver and its version.
-    fn name(&self) -> &'static str;
-    /// Ask one query.
-    fn ask(&self, query: &str) -> Outcome;
-}
 
 /// What the encoding's uniqueness claim is relative to.
 ///

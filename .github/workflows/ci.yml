@@ -98,6 +98,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y z3
       - name: Show solver version
         run: z3 --version
+      # The runner itself, before the encoding that goes through it. This is the only
+      # test that shows a real solver really does print error output containing the
+      # text `sat` on stdout, which is what `gs-solver`'s whole-line parsing exists to
+      # survive. A fake solver cannot establish that; only a real one can.
+      - name: The solver runner handles a real solver
+        env:
+          GATEDSPARK_REQUIRE_SOLVER: "1"
+        run: cargo test -p gs-solver --test real_solver -- --nocapture
+      # And the encoding through it. Since the test now drives `gs_solver` rather than
+      # a copy of the same logic, this job checks the code that actually ships.
       - name: Solver agreement
         env:
           GATEDSPARK_REQUIRE_SOLVER: "1"

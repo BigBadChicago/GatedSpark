@@ -30,9 +30,8 @@
 //!   solvers disagreeing about a uniqueness result is a build failure rather than
 //!   something nobody would ever notice.
 
-use std::io::Write;
-use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use gs_core::report::NotPublishable;
 use gs_core::state::Dims;
@@ -45,6 +44,7 @@ use gs_nonogram::rules::Nonogram;
 use gs_nonogram::smtlib::{solvability_query, uniqueness_query};
 use gs_nonogram::solve::{solve, Budget, Solved};
 use gs_nonogram::worker::{run, Limits, Quota};
+use gs_solver::{ExternalSolver, NoVerdict, TimeLimit};
 
 /// What a solver said. Mirrors `gs_core::verification::Outcome`, kept separate here
 /// because this runner is test scaffolding and must not become the engine's verifier.
@@ -57,64 +57,50 @@ enum Answer {
 
 struct Solver {
     name: String,
-    program: PathBuf,
+    runner: ExternalSolver,
 }
 
 impl Solver {
     /// Run one query and return the solver's verdict.
     ///
-    /// Parses whole lines: `unsat` contains `sat`, so a substring search would read
-    /// every refutation as a confirmation — which is the one mistake here that would
-    /// invert the project's central claim while looking like it worked.
+    /// # This deliberately uses the production runner
+    ///
+    /// The subprocess handling, the output parsing and the whole-line rule all live in
+    /// `gs-solver` and are exercised here rather than copied. That matters: this is the
+    /// only job in CI that puts our work in front of a program nobody here wrote, so it
+    /// is the only place the real runner can be checked against a real solver. A second
+    /// copy of that logic in this file would mean the code that actually ships was
+    /// never the code this job proved.
+    ///
+    /// # Why this panics where the runner does not
+    ///
+    /// `gs-solver` turns every failure into `Unknown`, which is right for an unattended
+    /// worker: the gate refuses an `Unknown`, so nothing is published on one. Here the
+    /// opposite is wanted. A solver that gives no verdict on our encoding means the
+    /// encoding is malformed, and that must stop the build with the query in front of
+    /// whoever reads the log, not be absorbed into a quiet refusal.
+    ///
+    /// The solver's *own* `unknown` is the one case that passes through, because that
+    /// is a real answer about a hard query rather than a sign anything is broken.
     fn ask(&self, query: &str, label: &str) -> Answer {
-        let path = write_query(query, label);
-        let output = Command::new(&self.program)
-            .arg(&path)
-            .output()
-            .unwrap_or_else(|e| panic!("{} could not run on {label}: {e}", self.name));
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        let mut answer = None;
-        for line in stdout.lines() {
-            match line.trim() {
-                "sat" => answer = Some(Answer::Sat),
-                "unsat" => answer = Some(Answer::Unsat),
-                "unknown" => answer = Some(Answer::Unknown),
-                _ => {}
-            }
-        }
-
-        answer.unwrap_or_else(|| {
-            panic!(
-                "{} gave no verdict on {label}.\n\
+        let answer = self.runner.ask_explained(query);
+        match (answer.outcome, &answer.why_not) {
+            (Outcome::Sat, _) => Answer::Sat,
+            (Outcome::Unsat, _) => Answer::Unsat,
+            (Outcome::Unknown, Some(NoVerdict::SolverSaidUnknown)) => Answer::Unknown,
+            (Outcome::Unknown, why) => panic!(
+                "{} gave no verdict on {label}: {why:?}\n\
                  This is what a malformed encoding looks like, so the query is below.\n\
-                 stdout: {stdout}\nstderr: {stderr}\n\
                  --- query ---\n{}",
                 self.name,
                 first_lines(query, 25)
-            )
-        })
+            ),
+        }
     }
 }
 
 fn first_lines(text: &str, n: usize) -> String {
     text.lines().take(n).collect::<Vec<_>>().join("\n")
-}
-
-/// Write a query where the solver can read it. The `.smt2` extension matters: some
-/// solvers pick their input language from it.
-fn write_query(query: &str, label: &str) -> PathBuf {
-    let safe: String = label
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let mut path = std::env::temp_dir();
-    path.push(format!("gatedspark_{}_{safe}.smt2", std::process::id()));
-    let mut file = std::fs::File::create(&path).expect("a temporary file for the query");
-    file.write_all(query.as_bytes()).expect("writing the query");
-    path
 }
 
 /// The solvers configured for this run, or an explanation of why there are none.
@@ -134,7 +120,15 @@ fn solvers() -> Result<Vec<Solver>, String> {
         if runnable(&program) {
             found.push(Solver {
                 name: format!("{program} (via {var})"),
-                program: PathBuf::from(program),
+                // Generous. This job runs 12 fixtures and an 8-puzzle pipeline on a
+                // shared CI machine, and a limit tight enough to fire under load would
+                // turn a slow runner into a build failure that looks like a bug in the
+                // encoding.
+                runner: ExternalSolver::new(
+                    &program,
+                    "solver under test",
+                    TimeLimit::of(Duration::from_secs(120)).expect("non-zero"),
+                ),
             });
         } else if var == "GATEDSPARK_SMT_SOLVER_2" {
             // An explicitly configured second solver that cannot run is always an
@@ -153,13 +147,6 @@ fn solvers() -> Result<Vec<Solver>, String> {
         return Err(message);
     }
     Ok(found)
-}
-
-fn runnable(program: &str) -> bool {
-    Command::new(program)
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
 }
 
 /// A fixture, and what our own line solver concluded about it.
@@ -346,6 +333,21 @@ impl gs_nonogram::publish::Verifier for SolverAsVerifier<'_> {
             Answer::Unknown => Outcome::Unknown,
         }
     }
+}
+
+/// Bridges the pipeline straight to the production runner, with no panic in between.
+///
+/// `SolverAsVerifier` above is this file's loud wrapper, which stops the build when a
+/// solver gives no verdict. This one is `gs_solver::ExternalSolver` used exactly as a
+/// batch worker would use it, so the pipeline test below can be run through the real
+/// thing without the test's own scaffolding in the path.
+fn runnable(program: &str) -> bool {
+    ExternalSolver::new(
+        program,
+        "probe",
+        TimeLimit::of(Duration::from_secs(30)).expect("non-zero"),
+    )
+    .runnable()
 }
 
 /// The whole slice, end to end, against a real solver.

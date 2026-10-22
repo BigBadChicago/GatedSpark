@@ -153,7 +153,7 @@ there are players. The thresholds are provisional and the module says so.
 | Solvability is asked before uniqueness, since uniqueness needs the witness | `publishing::the_uniqueness_query_is_the_second_one_asked` |
 | The witness is replayed through the engine's own goal test, not re-checked locally | `publishing::the_witness_is_replayed_through_the_engine`; `replay_of` calls `Ruleset::is_solved` |
 | Two reports for the same candidate are identical, so a re-verification can diff them | `publishing::two_reports_for_the_same_candidate_are_identical` |
-| This crate cannot answer its own solver questions | structural: `Verifier` is a trait with no implementation in the crate, so an `Outcome` can only arrive from outside |
+| This crate cannot answer its own solver questions | structural: `Verifier` is a trait (now in `gs_core::verification`, re-exported here) with no implementation in either the core or a puzzle family, so an `Outcome` can only arrive from outside; the real one is in `gs-solver` (ADR 0007) |
 
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
@@ -199,6 +199,10 @@ there are players. The thresholds are provisional and the module says so.
 | A report names the fingerprint of the package actually written from it | structural: `seal` returns the id it computed and `bind_to` takes the `Sealed`, so a caller cannot supply an id it derived itself; `packaging::publish_hands_back_a_report_bound_to_the_package_it_sealed` |
 | The whole pipeline is reproducible, signature included | `packaging::publishing_the_same_candidate_twice_gives_byte_identical_files` |
 | The content id covers which container version the body is read under | `package::the_content_id_covers_the_container_version_and_not_only_the_body` |
+| A solver that could not answer is never recorded as a refutation | `external_solver::every_failure_in_this_crate_is_unknown_and_none_is_unsat`, over every failure mode the runner has |
+| A verdict is a whole line, so `unsat` is never read as `sat` | `external_solver::the_word_unsat_inside_a_sentence_is_not_a_refutation`, verified by mutation; and against a real solver's own error output by `real_solver::a_real_solvers_error_output_is_never_mistaken_for_a_verdict` |
+| A solver's time limit is real, and the runner cannot deadlock waiting for one | `external_solver::a_solver_that_never_finishes_is_killed_and_reported_as_a_timeout` and `..._a_very_talkative_solver_does_not_deadlock` |
+| CI's one outside-the-building job checks the runner that ships, not a copy of it | structural: `solver_agreement.rs` drives `gs_solver::ExternalSolver`; see ADR 0007 |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 

@@ -126,6 +126,14 @@ version = "0.0.1"
 dependencies = [
  "gs-core",
  "gs-crypto",
+ "gs-solver",
+]
+
+[[package]]
+name = "gs-solver"
+version = "0.0.1"
+dependencies = [
+ "gs-core",
 ]
 
 [[package]]

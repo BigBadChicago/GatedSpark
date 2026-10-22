@@ -1,0 +1,13 @@
+[package]
+name = "gs-solver"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Runs an external SMT-LIB2 solver as a subprocess, and never guesses at its answer."
+
+[lints]
+workspace = true
+
+[dependencies]
+gs-core = { path = "../gs-core" }
