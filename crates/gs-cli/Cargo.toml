@@ -1,0 +1,22 @@
+[package]
+name = "gs-cli"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The gatedspark command: fill a store with signed, verified, playable puzzles."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gatedspark"
+path = "src/main.rs"
+
+[dependencies]
+getrandom = "0.4.3"
+gs-core = { path = "../gs-core" }
+gs-crypto = { path = "../gs-crypto" }
+gs-nonogram = { path = "../gs-nonogram" }
+gs-solver = { path = "../gs-solver" }
+gs-store = { path = "../gs-store" }

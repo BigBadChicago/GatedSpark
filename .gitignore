@@ -1,1 +1,5 @@
 /target
+
+# Signing keys. `gatedspark keygen` refuses to write one inside a repository;
+# this is the second line of defence for one written by hand.
+*.key
