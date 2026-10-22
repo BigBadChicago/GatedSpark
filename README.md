@@ -44,3 +44,19 @@ cargo clippy --all-targets # floating-point arithmetic in the core is a build er
 The toolchain is pinned in `rust-toolchain.toml`. In an environment whose network policy blocks
 `static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
 [`docs/adr/0004-dependencies.md`](docs/adr/0004-dependencies.md).
+
+### On Windows, run the setup script once
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-windows.ps1
+```
+
+After that, the commands above work as written, with no extra flags.
+
+Why it is needed: a *linker* is the last step of a build, the part that joins the compiled pieces
+into one program you can run. Rust's default Windows setup borrows that linker from Visual Studio,
+so on a machine without Visual Studio the build stops with ``linker `link.exe` not found`` before any
+test runs. The script switches the machine to Rust's `gnu` toolchain, which brings its own linker,
+and installs the version named in `rust-toolchain.toml`. The host is deliberately **not** pinned in
+that file, because pinning it would break Linux and the Apple and Android targets; see
+[`docs/adr/0005-windows-gnu-toolchain.md`](docs/adr/0005-windows-gnu-toolchain.md).

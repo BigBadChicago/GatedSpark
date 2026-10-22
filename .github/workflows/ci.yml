@@ -33,6 +33,33 @@ jobs:
       - name: Determinism and replay
         run: cargo test -p gs-core --test determinism -- --nocapture
 
+  # Windows developer builds use the gnu toolchain, which brings its own linker; the
+  # msvc default borrows one from Visual Studio, so a machine without Visual Studio
+  # cannot link at all. See ADR 0005. This job keeps that path from rotting, and
+  # selects the toolchain the same way scripts/setup-windows.ps1 does rather than
+  # naming a version of its own, so the pin stays the single source of the version.
+  #
+  # What this job does NOT prove: that the build works with no Visual Studio present.
+  # GitHub's Windows runners ship it and we do not remove it to find out. The narrower
+  # claim it defends is that the gnu toolchain builds this workspace and passes its
+  # tests. Solver agreement stays gated by the Linux job below.
+  windows:
+    name: windows builds on the gnu toolchain
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Switch the default host to gnu
+        run: rustup set default-host x86_64-pc-windows-gnu
+      # Reads rust-toolchain.toml, so this also installs the pinned toolchain for the
+      # gnu host. The triple it prints is the assertion worth reading in the log.
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+          rustc -vV
+      - name: Full test suite
+        run: cargo test --workspace --all-targets
+
   checks:
     name: fmt, clippy, full test suite
     runs-on: ubuntu-latest
