@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gs-core"]
+members = ["crates/gs-core", "crates/gs-nonogram"]
 
 [workspace.package]
 edition = "2021"
