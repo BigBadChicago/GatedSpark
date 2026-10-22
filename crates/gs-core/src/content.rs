@@ -36,11 +36,13 @@ impl ContentId {
 
 /// A 32-byte digest function.
 ///
-/// **Unenforced in M0:** no cryptographic implementation ships yet, because this
-/// environment cannot reach the crate registry (see `docs/adr/0004-dependencies.md`).
-/// M4 binds this to a reviewed SHA-256 or BLAKE3 implementation before anything is
-/// signed. The test-only implementation in `tests/` exercises the *binding*
-/// discipline, not collision resistance, and must never be used to publish.
+/// The implementation is SHA-256, in `gs-crypto`, and it is deliberately not in this
+/// crate: see `docs/adr/0006-content-id-and-signature.md`, and the note on
+/// [`crate::package`] about why a crate that can sign should not be the crate whose
+/// tests check signatures. The weak stand-ins in this crate's `tests/` exercise the
+/// *binding* discipline — that an id comes from digesting bytes and is compared against
+/// what a file claims — and never collision resistance. Using one to publish would be a
+/// security hole, which is why they are named the way they are.
 pub trait Digest {
     fn digest(&self, bytes: &[u8]) -> [u8; 32];
 }

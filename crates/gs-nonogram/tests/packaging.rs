@@ -1,67 +1,47 @@
-//! From a generated puzzle to a file and back to a playable puzzle.
+//! From a generated puzzle to a signed file and back to a playable puzzle.
 //!
 //! The other tests in this crate stop at the validation report. These go one step
 //! further and close the loop the whole slice exists to demonstrate: generate, ask a
-//! solver, write a file, read the file, and check that what comes out is the puzzle
-//! that went in and that the engine still accepts its answer.
+//! solver, write a signed file, read the file, and check that what comes out is the
+//! puzzle that went in and that the engine still accepts its answer.
 //!
-//! The stand-ins here are a fake digest and a fake signature, because no real ones
-//! exist yet (ADR 0004). What they let these tests prove is that the *wiring* is
-//! right — the clues survive the trip, nothing is silently dropped, and the pattern
-//! the generator started from is not in the file. What they cannot prove is that the
-//! file is tamper-proof, which waits on a reviewed implementation.
+//! The digest and the signature here are the real ones, from `gs-crypto`: SHA-256 and
+//! Ed25519. So these tests prove more than the wiring — a changed byte anywhere in the
+//! file is genuinely detected, and a file signed by a key this reader does not trust is
+//! genuinely refused. The one thing that is still a stand-in is the *key*, which is
+//! written down below in the clear and could not be more plainly unfit to publish with.
 
-use gs_core::content::{ContentId, Digest};
-use gs_core::package::{open, seal, Manifest, SignatureVerifier, Signer};
+use gs_core::package::{open, seal, Manifest, OpenError};
 use gs_core::ruleset::Ruleset;
 use gs_core::verification::Outcome;
+use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::clues::{Clues, DecodeError, Pattern};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::generate::Candidate;
-use gs_nonogram::publish::{manifest_for, report_for, Verifier};
+use gs_nonogram::publish::{manifest_for, publish, report_for, PublishError, Verifier};
 use gs_nonogram::rules::Nonogram;
 use gs_nonogram::solve::{solve, Budget};
 
-/// Not a hash. See `gs-core/tests/package.rs` for why a test digest has to be
-/// sensitive to every byte, and why using one of these to publish would be a
-/// security hole.
-struct NotAHash;
+/// A private key that is printed here in a public repository, which is the only thing
+/// anybody needs to know about it. It exists so these tests exercise real Ed25519
+/// rather than a stand-in. Anything signed with it is signed by everyone.
+const TEST_ONLY_PRIVATE_KEY_DO_NOT_PUBLISH_WITH_THIS: [u8; 32] = [
+    0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+    0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+];
 
-impl Digest for NotAHash {
-    fn digest(&self, bytes: &[u8]) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in bytes {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        for (i, chunk) in out.chunks_mut(8).enumerate() {
-            let mixed = h
-                .wrapping_add(u64::try_from(i).expect("small"))
-                .wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            chunk.copy_from_slice(&mixed.to_le_bytes());
-        }
-        out
-    }
+const TEST_KEY_ID: &str = "test-only-key";
+
+fn signer() -> Ed25519Signer {
+    Ed25519Signer::new(TEST_KEY_ID, &TEST_ONLY_PRIVATE_KEY_DO_NOT_PUBLISH_WITH_THIS)
 }
 
-/// Not a signature. Anyone can produce it, which is exactly what a real scheme must
-/// make impossible.
-struct NotASignature;
-
-impl Signer for NotASignature {
-    fn key_id(&self) -> &str {
-        "test-key"
-    }
-    fn sign(&self, content_id: &ContentId) -> Vec<u8> {
-        content_id.as_bytes().to_vec()
-    }
-}
-
-impl SignatureVerifier for NotASignature {
-    fn verify(&self, content_id: &ContentId, key_id: &str, signature: &[u8]) -> bool {
-        key_id == "test-key" && signature == content_id.as_bytes()
-    }
+/// A reader that trusts exactly the test key above and nothing else.
+fn trusted() -> TrustedKeys {
+    let mut keys = TrustedKeys::none();
+    keys.trust(TEST_KEY_ID, &signer().public_key())
+        .expect("the test key is valid and the list starts empty");
+    keys
 }
 
 /// Answers the two questions the way a solver would for a uniquely solvable puzzle.
@@ -142,9 +122,9 @@ fn a_sealed_package_becomes_a_playable_puzzle() {
     // code; this is the shape of what a device actually does.
     let candidate = a_candidate_in(1);
     let manifest = manifest_of(&candidate);
-    let bytes = seal(&manifest, &NotAHash, &NotASignature).expect("seals");
+    let bytes = seal(&manifest, &Sha256, &signer()).expect("seals").bytes;
 
-    let got = open(&bytes, &NotAHash, &NotASignature).expect("opens");
+    let got = open(&bytes, &Sha256, &trusted()).expect("opens");
     let clues = Clues::from_canonical_bytes(&got.manifest.payload).expect("the payload is clues");
     assert_eq!(clues, candidate.puzzle.clues);
 
@@ -163,13 +143,10 @@ fn the_package_carries_the_evidence_the_report_recorded() {
     let candidate = a_candidate_in(0);
     let report =
         report_for(&candidate, &verifier(), Budget::default()).expect("the candidate is askable");
-    let bytes = seal(
-        &manifest_for(&candidate, &report),
-        &NotAHash,
-        &NotASignature,
-    )
-    .expect("seals");
-    let got = open(&bytes, &NotAHash, &NotASignature).expect("opens");
+    let bytes = seal(&manifest_for(&candidate, &report), &Sha256, &signer())
+        .expect("seals")
+        .bytes;
+    let got = open(&bytes, &Sha256, &trusted()).expect("opens");
 
     assert_eq!(got.manifest.family, "nonogram");
     assert_eq!(got.manifest.seed, candidate.seed);
@@ -207,7 +184,7 @@ fn the_package_does_not_carry_the_answer() {
     let witness = solve(&candidate.puzzle, Budget::default())
         .witness
         .expect("a unique puzzle has a witness");
-    let sealed = seal(&manifest, &NotAHash, &NotASignature).expect("seals");
+    let sealed = seal(&manifest, &Sha256, &signer()).expect("seals").bytes;
 
     // The positive half first, so the negative half below means something: a search
     // that found nothing because it cannot find anything would pass whatever the
@@ -273,4 +250,212 @@ fn every_truncation_of_a_clue_payload_is_refused_and_none_panics() {
         );
     }
     assert!(Clues::from_canonical_bytes(&bytes).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// With a real digest and a real signature, these are claims about the file rather
+// than about the wiring.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn publish_hands_back_a_report_bound_to_the_package_it_sealed() {
+    // The closed loop, in one call: generate, ask, decide, seal, bind. The report that
+    // comes back must be publishable — which is the first time in this project's
+    // history that has been true of anything — and the id it carries must be the id of
+    // the file next to it, not a second one worked out separately.
+    let candidate = a_candidate_in(1);
+    let published = publish(
+        &candidate,
+        &verifier(),
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect("a uniquely solvable candidate with an agreeing solver is publishable");
+
+    assert_eq!(
+        published.report.publishable(),
+        Ok(()),
+        "the whole point of binding the content id is that this now passes"
+    );
+
+    let got = open(&published.package, &Sha256, &trusted()).expect("the sealed package opens");
+    assert_eq!(
+        published.report.content_id,
+        Some(got.content_id),
+        "the report must name the fingerprint of the package beside it"
+    );
+    assert_eq!(got.key_id, TEST_KEY_ID);
+}
+
+#[test]
+fn a_candidate_the_solver_will_not_vouch_for_is_never_sealed() {
+    // A solver that says the puzzle has more than one answer. Nothing may be signed:
+    // the refusal arrives instead of a package, and it carries the report, because why
+    // a puzzle was dropped is worth keeping.
+    struct SaysThereIsAnotherAnswer;
+    impl Verifier for SaysThereIsAnotherAnswer {
+        fn name(&self) -> &'static str {
+            "a solver that found a second answer"
+        }
+        fn ask(&self, _query: &str) -> Outcome {
+            Outcome::Sat
+        }
+    }
+
+    let candidate = a_candidate_in(1);
+    let err = publish(
+        &candidate,
+        &SaysThereIsAnotherAnswer,
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect_err("a puzzle with more than one answer must not be published");
+
+    match err {
+        PublishError::Refused { report, .. } => {
+            assert!(
+                report.content_id.is_none(),
+                "nothing was sealed, so there is no fingerprint"
+            );
+            assert_eq!(
+                report.queries.len(),
+                2,
+                "the record of what was asked is kept"
+            );
+        }
+        other => panic!("expected a refusal from the gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_solver_that_does_not_know_is_not_treated_as_a_solver_that_said_no() {
+    // An UNKNOWN is carried into the report as UNKNOWN and refuses publication. The
+    // puzzle is not published and is also not refuted; those are different facts and
+    // this is where the difference has to survive.
+    struct DoesNotKnow;
+    impl Verifier for DoesNotKnow {
+        fn name(&self) -> &'static str {
+            "a solver that timed out"
+        }
+        fn ask(&self, _query: &str) -> Outcome {
+            Outcome::Unknown
+        }
+    }
+
+    let candidate = a_candidate_in(1);
+    let err = publish(
+        &candidate,
+        &DoesNotKnow,
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect_err("an undecided solver is not grounds to publish");
+
+    match err {
+        PublishError::Refused { report, .. } => {
+            assert!(report.has_undecided_query());
+            assert!(report
+                .queries
+                .iter()
+                .all(|q| q.returned == Outcome::Unknown));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn publishing_the_same_candidate_twice_gives_byte_identical_files() {
+    // Reproducibility, all the way through the signature. Ed25519 is deterministic and
+    // nothing in the manifest comes from a clock or a counter, so the same puzzle and
+    // the same key must give the same file. If this ever fails, something in the
+    // pipeline has started reading something it should not.
+    let candidate = a_candidate_in(2);
+    let once = publish(
+        &candidate,
+        &verifier(),
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect("publishes");
+    let twice = publish(
+        &candidate,
+        &verifier(),
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect("publishes");
+    assert_eq!(once.package, twice.package);
+    assert_eq!(once.report.content_id, twice.report.content_id);
+}
+
+#[test]
+fn a_single_flipped_bit_anywhere_in_a_published_file_is_detected() {
+    // This is the test the stand-in digest could never support. Every bit of the body
+    // and of the stated fingerprint, one at a time: the file must be refused, and the
+    // refusal must be the fingerprint check or the signature, never a successful open.
+    let candidate = a_candidate_in(0);
+    let published = publish(
+        &candidate,
+        &verifier(),
+        Budget::default(),
+        &Sha256,
+        &signer(),
+    )
+    .expect("publishes");
+    let keys = trusted();
+
+    for byte in 0..published.package.len() {
+        for bit in 0..8u8 {
+            let mut broken = published.package.clone();
+            broken[byte] ^= 1 << bit;
+            match open(&broken, &Sha256, &keys) {
+                Ok(_) => panic!("bit {bit} of byte {byte} was changed and the file still opened"),
+                Err(OpenError::ContentIdMismatch { .. } | OpenError::SignatureRejected) => {}
+                // Framing damage — a changed magic byte, a length that now runs off the
+                // end — is refused earlier and just as firmly. What must not happen is
+                // a successful open.
+                Err(_) => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn a_file_signed_by_a_key_this_reader_does_not_trust_is_refused() {
+    // The package is well-formed and its signature is genuine. It is simply not signed
+    // by anybody this reader was told to accept, which is the only thing standing
+    // between a device and content from a stranger.
+    let stranger = Ed25519Signer::new(
+        "somebody-elses-key",
+        &[
+            0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda, 0x9d, 0xb6, 0xc3, 0x46, 0xec, 0x11,
+            0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f, 0x35, 0xab, 0xa6, 0x24, 0xda, 0x8c, 0xf6, 0xed,
+            0x4f, 0xb8, 0xa6, 0xfb,
+        ],
+    );
+    let candidate = a_candidate_in(1);
+    let report =
+        report_for(&candidate, &verifier(), Budget::default()).expect("the candidate is askable");
+    let bytes = seal(&manifest_for(&candidate, &report), &Sha256, &stranger)
+        .expect("seals")
+        .bytes;
+
+    assert_eq!(
+        open(&bytes, &Sha256, &trusted()),
+        Err(OpenError::SignatureRejected),
+        "a genuine signature from an unknown key must be refused"
+    );
+
+    // And it is the key that is wrong, not the file: a reader that does trust that key
+    // opens the very same bytes.
+    let mut wider = trusted();
+    wider
+        .trust("somebody-elses-key", &stranger.public_key())
+        .expect("a second key under a second id");
+    assert!(open(&bytes, &Sha256, &wider).is_ok());
 }

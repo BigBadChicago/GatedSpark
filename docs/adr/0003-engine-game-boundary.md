@@ -184,7 +184,7 @@ there are players. The thresholds are provisional and the module says so.
 | An over-long field is an error, never a truncation | `package::an_over_long_field_is_an_error_rather_than_a_truncation` |
 | The fingerprint handed back is recomputed, not taken from the file | `package::the_content_id_is_recomputed_from_the_body_rather_than_taken_from_the_file` |
 | "These bytes were checked" cannot be claimed without checking them | `Opened` has a private field, so `open` is the only code that can build one; the `compile_fail` doctest on `Opened` holds this, and the `checks` CI job runs `cargo test --workspace --doc` because `--all-targets` skips doctests |
-| The core cannot sign or verify its own packages | structural: `Signer` and `SignatureVerifier` are traits with no implementation in `gs-core` |
+| The core cannot sign or verify its own packages | structural: `Signer` and `SignatureVerifier` are traits with no implementation in `gs-core`; the real ones are in `gs-crypto`, which `gs-core` does not depend on (ADR 0006) |
 | A `ContentId` still only ever comes from digesting bytes | structural: `OpenError::ContentIdMismatch` carries the stated value as raw bytes, because a claim found in a file is not something this code digested |
 | A package becomes a playable puzzle again | `packaging::a_sealed_package_becomes_a_playable_puzzle`, which rebuilds the puzzle from the payload, re-solves it, and checks the engine accepts the answer |
 | Clue bytes round-trip, including empty lines and movable splits | `packaging::clue_bytes_round_trip` and `packaging::clue_bytes_round_trip_for_every_difficulty_level` |
@@ -192,15 +192,25 @@ there are players. The thresholds are provisional and the module says so.
 | A clue set whose line count disagrees with its board is refused | `packaging::a_line_count_that_disagrees_with_the_board_is_refused`; accepting one would let a decoded puzzle reach a state no generated puzzle can |
 | A package does not carry the answer | `packaging::the_package_does_not_carry_the_answer`, which first checks the search finds the clues, so a search that found nothing cannot pass by accident |
 | The evidence the report recorded survives into the file | `packaging::the_package_carries_the_evidence_the_report_recorded` |
+| The digest really is SHA-256 and the signature really is Ed25519 | `gs-crypto/tests/known_answers.rs`, against the published FIPS 180-4 and RFC 8032 vectors rather than against another run of our own code |
+| A changed byte anywhere in a published file is detected | `packaging::a_single_flipped_bit_anywhere_in_a_published_file_is_detected`, every bit of every byte, one at a time |
+| A genuine signature from a key the reader was not told to trust is refused | `packaging::a_file_signed_by_a_key_this_reader_does_not_trust_is_refused`, which then widens the trusted list and opens the same bytes, so the refusal is shown to be about the key and not the file |
+| Nothing is signed before the gate has agreed to it | structural: `publish` seals only when `publishable` returns `NoContentId` and nothing else; `packaging::a_candidate_the_solver_will_not_vouch_for_is_never_sealed` |
+| A report names the fingerprint of the package actually written from it | structural: `seal` returns the id it computed and `bind_to` takes the `Sealed`, so a caller cannot supply an id it derived itself; `packaging::publish_hands_back_a_report_bound_to_the_package_it_sealed` |
+| The whole pipeline is reproducible, signature included | `packaging::publishing_the_same_candidate_twice_gives_byte_identical_files` |
+| The content id covers which container version the body is read under | `package::the_content_id_covers_the_container_version_and_not_only_the_body` |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
-- **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
-  Everything the package tests prove about tampering is therefore about the *wiring* — that the
-  digest is recomputed from the body and compared before anything is decoded — and not about
-  whether the digest is hard to forge. The same goes for signatures: `Signer` and
-  `SignatureVerifier` have no implementation, so a sealed package is currently tamper-*evident*
-  only to the extent the stand-in digest in the tests is, which is not at all.
+- ~~**Digest strength.**~~ **Resolved 2026-10-22 by ADR 0006.** The digest is SHA-256 and the
+  signature is Ed25519, both in `gs-crypto`, both checked against published test vectors. What is
+  still true, and is the reason the traits stay unimplemented in `gs-core`, is that this crate's
+  own package tests use stand-ins and so prove the *order and shape* of the checks rather than their
+  strength. The strength claims live where the real implementations are reachable:
+  `gs-nonogram/tests/packaging.rs` flips every bit of a published file one at a time and requires
+  each one to be refused, and requires a genuine signature from an untrusted key to be refused.
+  Still not decided, and tracked in ADR 0006 rather than here: where a production signing key comes
+  from.
 - **Re-judging a package that was read back from a file.** `verification::decide` takes queries
   whose names are `&'static str`, and a name read out of a file is not static, so a
   `package::Manifest` cannot be handed to the gate. That blocks the first of the four jobs

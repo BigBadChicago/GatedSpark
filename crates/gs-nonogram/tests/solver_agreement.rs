@@ -359,8 +359,13 @@ impl gs_nonogram::publish::Verifier for SolverAsVerifier<'_> {
 ///
 /// * the solver agrees with the filter on every puzzle the worker delivered;
 /// * the **only** thing stopping each report from being publishable is the missing
-///   content id, which is the honest current state of the world (ADR 0004). When a
-///   digest exists, this is what says the rest was already complete.
+///   content id — which is the correct state of a report that has not been sealed into
+///   a package yet, and is exactly the state `publish` treats as its go-ahead.
+///
+/// This test deliberately stops short of sealing. It is about whether a real solver
+/// agrees with us, and dragging a digest and a signing key into it would make a failure
+/// here ambiguous. The sealing half is proved in `packaging.rs` with the real
+/// implementations.
 #[test]
 fn the_whole_pipeline_produces_reports_a_real_solver_agrees_with() {
     let solvers = match solvers() {

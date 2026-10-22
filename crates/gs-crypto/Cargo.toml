@@ -1,0 +1,15 @@
+[package]
+name = "gs-crypto"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "GatedSpark's only cryptography: the content digest and the package signature."
+
+[lints]
+workspace = true
+
+[dependencies]
+ed25519-dalek = "3.0.0"
+gs-core = { path = "../gs-core" }
+sha2 = "0.11.1"

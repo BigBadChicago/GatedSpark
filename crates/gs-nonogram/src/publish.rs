@@ -24,8 +24,9 @@
 //! a useful record, not an error, so the refusal appears inside the report rather
 //! than replacing it.
 
-use gs_core::package::Manifest;
-use gs_core::report::{Measurement, Replay, ValidationReport};
+use gs_core::content::Digest;
+use gs_core::package::{seal, EncodeError as PackageEncodeError, Manifest, Sealed, Signer};
+use gs_core::report::{Measurement, NotPublishable, Replay, ValidationReport};
 use gs_core::ruleset::Ruleset;
 use gs_core::state::State;
 use gs_core::verification::{Outcome, Query};
@@ -106,9 +107,11 @@ pub fn report_for(
     ];
 
     Ok(ValidationReport {
-        // No digest implementation exists yet, so there is no content id and the
-        // report is correctly not publishable. A placeholder here would be worse than
-        // the gap: see ADR 0004.
+        // No content id yet, and that is the correct state for a report at this point
+        // rather than a gap. A package's fingerprint is the fingerprint of the package,
+        // which does not exist until the report has been turned into one; `publish`
+        // below seals it and binds the id back. So this report is deliberately not
+        // publishable, with `NoContentId` as its only remaining objection.
         content_id: None,
         ruleset: Ruleset::id(&candidate.puzzle),
         generator_version: GENERATOR_VERSION,
@@ -200,9 +203,98 @@ pub fn filter_and_solver_agree(candidate: &Candidate, report: &ValidationReport)
 /// on the server, because a package is what a player receives.
 ///
 /// This function does not seal anything. Sealing needs a digest and a signing key,
-/// neither of which this crate has or should have; see
+/// neither of which this crate has or should have; see [`publish`] and
 /// [`gs_core::package::seal`].
 #[must_use]
 pub fn manifest_for(candidate: &Candidate, report: &ValidationReport) -> Manifest {
     Manifest::from_report(report, candidate.puzzle.clues.canonical_bytes())
+}
+
+/// A puzzle that passed every check, the evidence for it, and the file a player gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Published {
+    /// The evidence, now carrying the fingerprint of the package below.
+    pub report: ValidationReport,
+    /// The package file, signed.
+    pub package: Vec<u8>,
+}
+
+/// Why a candidate did not become a published package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishError {
+    /// The question could not be asked at all.
+    Unaskable(Unaskable),
+    /// The question was asked and the answer was no. Carries the gate's own refusal,
+    /// so a caller can tell a solver that refuted the puzzle from one that timed out.
+    ///
+    /// A refused candidate is an ordinary outcome of generation, not a malfunction. The
+    /// report that explains it is carried along, because that record is worth keeping:
+    /// it is what a later audit reads to find out why a puzzle was dropped.
+    Refused {
+        reason: NotPublishable,
+        report: Box<ValidationReport>,
+    },
+    /// The manifest could not be written — some field is longer than the format can
+    /// express.
+    Encoding(PackageEncodeError),
+}
+
+/// The whole loop: ask the solver, write the evidence, and seal a package only if the
+/// evidence says yes.
+///
+/// # The order is the point
+///
+/// 1. Build the report, which asks the solver and replays the witness.
+/// 2. Put it to [`ValidationReport::publishable`] — the one gate — and go on **only**
+///    if its single remaining objection is the missing content id. Any other refusal
+///    ends here, with the report kept as the record of why.
+/// 3. Seal the package. This is the first point at which anything is signed, so
+///    nothing is ever signed before the gate has agreed to it.
+/// 4. Bind the report to the package that was just sealed, which is where the content
+///    id comes from.
+/// 5. Ask the gate again. It must now say yes, and if it does not, that is a bug here
+///    rather than a property of the puzzle, so it is an assertion and not an error.
+///
+/// Step 2 deliberately treats [`NotPublishable::NoContentId`] as the go-ahead rather
+/// than re-checking the queries and the replay by hand. Re-checking them would be a
+/// second copy of the gate's logic, and two copies of a judgement is how the two come
+/// to disagree.
+pub fn publish<D: Digest, S: Signer>(
+    candidate: &Candidate,
+    verifier: &dyn Verifier,
+    budget: Budget,
+    digest: &D,
+    signer: &S,
+) -> Result<Published, PublishError> {
+    let mut report = report_for(candidate, verifier, budget).map_err(PublishError::Unaskable)?;
+
+    match report.publishable() {
+        // The expected state of a fresh report: everything checked out and the only
+        // thing missing is the fingerprint of a package that does not exist yet.
+        Err(NotPublishable::NoContentId) => {}
+        // Already bound. Not an error — sealing the same report again gives the same
+        // bytes, because nothing in the manifest comes from a clock or a counter.
+        Ok(()) => {}
+        Err(reason) => {
+            return Err(PublishError::Refused {
+                reason,
+                report: Box::new(report),
+            })
+        }
+    }
+
+    let manifest = manifest_for(candidate, &report);
+    let sealed: Sealed = seal(&manifest, digest, signer).map_err(PublishError::Encoding)?;
+    report.bind_to(&sealed);
+
+    debug_assert_eq!(
+        report.publishable(),
+        Ok(()),
+        "a report that only lacked a content id must be publishable once it has one"
+    );
+
+    Ok(Published {
+        report,
+        package: sealed.bytes,
+    })
 }

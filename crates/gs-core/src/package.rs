@@ -28,14 +28,19 @@
 //! [`Manifest::queries`] for the one piece of friction that follows from it, which
 //! is open rather than hidden.
 //!
-//! # Unenforced here
+//! # No cryptography in this crate, on purpose
 //!
-//! No cryptography ships in this crate. [`Digest`] has no implementation (see
-//! `docs/adr/0004-dependencies.md`) and neither [`Signer`] nor
-//! [`SignatureVerifier`] does, which is what stops this crate from signing
-//! anything with a key of its own invention or verifying its own signatures. The
-//! test implementations in `tests/` exercise the *binding* discipline and are named
-//! so that using one to publish would be obvious.
+//! [`Digest`] has no implementation here, and neither [`Signer`] nor
+//! [`SignatureVerifier`] does. The real ones live in `gs-crypto` (SHA-256 and
+//! Ed25519; see `docs/adr/0006-content-id-and-signature.md`), which is the only crate
+//! in the workspace that implements them.
+//!
+//! That is not an accident of layering. A crate that can sign is a crate that can
+//! forge, and a crate that verifies its own signatures proves nothing. Because the
+//! real signer is out of reach from here, every signature in this crate's own test
+//! tree is visibly a stand-in, named so that using one to publish would be obvious in
+//! review. If a real signer were reachable from these tests, that would stop being
+//! true.
 
 use crate::content::{ContentId, Digest};
 use crate::hash::StateHash;
@@ -434,14 +439,57 @@ pub struct Opened {
     checked_by_open: (),
 }
 
+/// The bytes a package's content id is computed over: the container version, little
+/// endian, followed by the body.
+///
+/// # Why the version is in here
+///
+/// The signature covers the content id and nothing else, so whatever the content id
+/// does not cover is unprotected. If the id covered only the body, the container
+/// version would be loose: the day a version 2 exists, the same signed body could be
+/// relabelled version 1 or version 2 and read under whichever set of rules suited
+/// whoever changed the byte. Including it means a package commits to *which rules it
+/// is to be read under*, not only to its contents.
+///
+/// The cost is that a content id is not quite `sha256sum` of the body — it is the hash
+/// of two version bytes followed by the body. That is written down here, in
+/// `tests/package.rs`, and in ADR 0006, because an identity nobody outside this code
+/// can reproduce would defeat the point of choosing a standard hash.
+///
+/// What is still not covered: the key id and the signature itself. That is unavoidable
+/// — a signature cannot cover itself — and it is why [`SignatureVerifier`] must hold a
+/// list of keys it trusts rather than believing the id the file states.
+fn digest_input(version: u16, body: &[u8]) -> Vec<u8> {
+    let mut input = Vec::with_capacity(2 + body.len());
+    input.extend_from_slice(&version.to_le_bytes());
+    input.extend_from_slice(body);
+    input
+}
+
+/// A written package, and the content id it was bound to.
+///
+/// The id is handed back rather than left to be recomputed, and that is the whole
+/// reason this type exists instead of [`seal`] returning bytes. A validation report
+/// has to record the id of the package made from it, and if the caller derived that id
+/// itself there would be two independent computations of one value — the exact failure
+/// [`crate::content`] exists to prevent. There is one derivation, it happens in
+/// [`seal`], and [`crate::report::ValidationReport::bind_to`] copies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sealed {
+    /// The package file.
+    pub bytes: Vec<u8>,
+    /// The fingerprint of what is in it.
+    pub content_id: ContentId,
+}
+
 /// Write a package: canonical body, its digest, and a signature over that digest.
 pub fn seal<D: Digest, S: Signer>(
     manifest: &Manifest,
     digest: &D,
     signer: &S,
-) -> Result<Vec<u8>, EncodeError> {
+) -> Result<Sealed, EncodeError> {
     let body = manifest.canonical_bytes()?;
-    let content_id = ContentId::of(digest, &body);
+    let content_id = ContentId::of(digest, &digest_input(FORMAT_VERSION, &body));
     let signature = signer.sign(&content_id);
     let key_id = signer.key_id();
 
@@ -452,7 +500,10 @@ pub fn seal<D: Digest, S: Signer>(
     out.extend_from_slice(content_id.as_bytes());
     put_str(&mut out, key_id, "key id")?;
     put_bytes32(&mut out, &signature, "signature")?;
-    Ok(out)
+    Ok(Sealed {
+        bytes: out,
+        content_id,
+    })
 }
 
 /// Read a package, checking before decoding.
@@ -460,7 +511,8 @@ pub fn seal<D: Digest, S: Signer>(
 /// The order of operations is the contract:
 ///
 /// 1. Framing — magic, version, and the lengths that say where the body ends.
-/// 2. The digest of the body is recomputed and compared with the stated content id.
+/// 2. The digest of the container version and the body is recomputed and compared
+///    with the stated content id. See [`digest_input`] for why the version is in it.
 /// 3. The signature over that content id is put to the verifier.
 /// 4. Only now is the body decoded.
 ///
@@ -494,7 +546,7 @@ pub fn open<D: Digest, V: SignatureVerifier>(
         return Err(OpenError::TrailingBytes(remaining));
     }
 
-    let computed = ContentId::of(digest, body);
+    let computed = ContentId::of(digest, &digest_input(version, body));
     if computed.as_bytes() != &stated {
         return Err(OpenError::ContentIdMismatch { stated, computed });
     }

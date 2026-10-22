@@ -29,9 +29,15 @@ use gs_core::verification::Outcome;
 /// in `validation_report.rs`: these tests need a digest that notices a change deep
 /// inside a long body, which that one would not. It is still trivially invertible and
 /// offers no collision resistance, so using it to publish anything would be a
-/// security hole. What the tests below prove with it is the *wiring* — that the
-/// digest is recomputed from the body and compared — not that the digest is strong.
-/// Strength arrives with the reviewed implementation ADR 0004 is waiting on.
+/// security hole. What the tests below prove with it is the *order and the shape* of
+/// the checks — that the digest is recomputed from the body and compared before
+/// anything is decoded — not that the digest is strong.
+///
+/// The real digest is SHA-256 and the real signature is Ed25519, both in `gs-crypto`
+/// (ADR 0006), and both are deliberately unreachable from this crate's tests: a crate
+/// that could verify its own signatures would prove nothing by doing so. The tests
+/// that a changed byte is genuinely detected therefore live where the real ones are
+/// reachable, in `gs-nonogram/tests/packaging.rs`.
 struct NotAHashButSensitiveToEveryByte;
 
 impl Digest for NotAHashButSensitiveToEveryByte {
@@ -150,7 +156,9 @@ fn manifest() -> Manifest {
 }
 
 fn sealed() -> Vec<u8> {
-    seal(&manifest(), &digest(), &signer()).expect("manifest is well within the length limits")
+    seal(&manifest(), &digest(), &signer())
+        .expect("manifest is well within the length limits")
+        .bytes
 }
 
 fn opened(bytes: &[u8]) -> Result<Opened, OpenError> {
@@ -183,11 +191,24 @@ fn wrap(body: &[u8], version: u16, content_id: &[u8; 32], key_id: &str, sig: &[u
     out
 }
 
+/// The bytes a content id covers, written out by hand from what `package.rs`
+/// documents: the container version, little endian, then the body.
+///
+/// Built here rather than imported, for the same reason as [`wrap`]. If the tests
+/// asked the module what it digests, they would agree with it by construction and the
+/// documented rule — that the signature covers which rules the body is read under —
+/// could quietly stop being true.
+fn digest_input(version: u16, body: &[u8]) -> Vec<u8> {
+    let mut input = version.to_le_bytes().to_vec();
+    input.extend_from_slice(body);
+    input
+}
+
 /// Wrap a body honestly: the stated content id really is its digest, and the
 /// signature really is over that id. Used by the tests that need a well-formed
 /// container around a deliberately broken *body*.
 fn wrap_honestly(body: &[u8]) -> Vec<u8> {
-    let id = ContentId::of(&digest(), body);
+    let id = ContentId::of(&digest(), &digest_input(FORMAT_VERSION, body));
     let sig = signer().sign(&id);
     wrap(body, FORMAT_VERSION, id.as_bytes(), KEY, &sig)
 }
@@ -210,8 +231,33 @@ fn the_content_id_is_recomputed_from_the_body_rather_than_taken_from_the_file() 
     let body = manifest().canonical_bytes().expect("encodes");
     assert_eq!(
         got.content_id,
-        ContentId::of(&digest(), &body),
+        ContentId::of(&digest(), &digest_input(FORMAT_VERSION, &body)),
         "the id handed back must be the digest of the body, not whatever the file said"
+    );
+}
+
+#[test]
+fn the_content_id_covers_the_container_version_and_not_only_the_body() {
+    // The signature covers the content id and nothing else, so anything outside the
+    // content id is unprotected. The container version says which rules the body is to
+    // be read under, and a signed body that could be relabelled from version 1 to
+    // version 2 would be a signed body whose meaning anybody can change.
+    //
+    // `open` refuses an unknown version before it digests anything, so today this
+    // cannot be demonstrated end to end — version 2 does not exist. What can be
+    // demonstrated, and is the property that will still matter when it does, is that
+    // the id itself is different.
+    let body = manifest().canonical_bytes().expect("encodes");
+    let at_v1 = ContentId::of(&digest(), &digest_input(1, &body));
+    let at_v2 = ContentId::of(&digest(), &digest_input(2, &body));
+    assert_ne!(
+        at_v1, at_v2,
+        "the same body under a different container version must not have the same id"
+    );
+    assert_ne!(
+        at_v1,
+        ContentId::of(&digest(), &body),
+        "the id must not be the digest of the body alone, or the version would be loose"
     );
 }
 
@@ -258,7 +304,7 @@ fn an_absent_band_is_not_an_empty_band() {
     );
 
     for m in [absent, empty] {
-        let bytes = seal(&m, &digest(), &signer()).expect("seals");
+        let bytes = seal(&m, &digest(), &signer()).expect("seals").bytes;
         assert_eq!(opened(&bytes).expect("opens").manifest, m);
     }
 }
@@ -269,7 +315,7 @@ fn unknown_survives_as_unknown() {
     // solver that did not decide is written down as not having decided.
     let mut m = manifest();
     m.queries[0].returned = Outcome::Unknown;
-    let bytes = seal(&m, &digest(), &signer()).expect("seals");
+    let bytes = seal(&m, &digest(), &signer()).expect("seals").bytes;
     let got = opened(&bytes).expect("opens");
     assert_eq!(got.manifest.queries[0].returned, Outcome::Unknown);
     assert!(got.manifest.has_undecided_query());
@@ -411,7 +457,7 @@ fn a_key_the_verifier_does_not_trust_is_refused() {
     let stranger = NotASignature {
         key_id: "someone-elses-key",
     };
-    let bytes = seal(&m, &digest(), &stranger).expect("seals");
+    let bytes = seal(&m, &digest(), &stranger).expect("seals").bytes;
     // The signature itself is perfectly good — the stand-in scheme is public, which
     // is exactly the situation a real signature scheme is meant to make impossible.
     // What refuses it is the verifier not trusting the key.
@@ -523,6 +569,6 @@ fn the_payload_is_carried_without_being_interpreted() {
     // valid anything still round-trip, because the platform's job is to carry them.
     let mut m = manifest();
     m.payload = vec![0xff, 0x00, 0xff, 0x00];
-    let bytes = seal(&m, &digest(), &signer()).expect("seals");
+    let bytes = seal(&m, &digest(), &signer()).expect("seals").bytes;
     assert_eq!(opened(&bytes).expect("opens").manifest.payload, m.payload);
 }

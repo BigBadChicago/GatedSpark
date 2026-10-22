@@ -37,7 +37,7 @@ published as unique — and under the identical-daily-board decision, every play
   trait later as a performance choice. It is never a second trust standard: content-delivery.md D4
   allows one verification standard, not a cheaper one for some channel.
 - Not yet implemented. This environment's network policy blocks the crate registry, so no solver
-  binding is vendored yet; see ADR 0004.
+  binding is vendored yet; see ADR 0004. The registry block that caused this is gone as of ADR 0004's second amendment, so this is now an open task rather than a blocked one.
 
 ## Alternatives
 

@@ -40,3 +40,28 @@ the cloud container's network policy. So the zero-dependency rule above is a con
 honoured, not a law of the project: the moment the container's allowed domains are widened, adding
 a dependency becomes an ordinary decision again rather than an impossible one. Nothing here changes
 until then, because a dependency that only some machines can fetch is worse than none.
+
+## Amendment, 2026-10-22, second one: the rule becomes "no dependency without a recorded reason"
+
+The container's network policy was widened and `index.crates.io`, `static.crates.io` and
+`static.rust-lang.org` are reachable, confirmed by `cargo search sha2` and a full `cargo build` in a
+fresh container. A running container keeps the rules it booted with, so picking up a changed policy
+needs a new session; that is worth knowing but is not a property of the project.
+
+So the constraint this ADR described is gone, and with it the reason for the zero-dependency rule as
+written. The rule it is replaced by:
+
+- **`gs-core` still has no third-party dependencies.** It is the crate the platform's determinism
+  rests on, and keeping its audit surface at zero is worth something on its own. This is now a
+  choice rather than a constraint.
+- **Everywhere else, a dependency needs a reason written down.** Not a ban, and not a free hand. The
+  first three arrive with ADR 0006: `sha2`, `ed25519-dalek` and `signature`, all in the new
+  `gs-crypto` crate, with their licences and the alternatives weighed recorded there.
+- **`content::Digest`, `package::Signer` and `package::SignatureVerifier` are implemented, in
+  `gs-crypto`.** The paragraph above saying they have no production implementation is superseded.
+  They stay as traits in `gs-core` for the reason ADR 0006 gives, which is not the registry: a crate
+  that can sign is a crate that can forge, and a crate that verifies its own signatures proves
+  nothing.
+
+What has not changed: a dependency that only some machines can fetch is still worse than none, which
+is why this amendment waited for the policy change rather than anticipating it.
