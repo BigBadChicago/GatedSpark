@@ -166,3 +166,120 @@ impl Clues {
         out
     }
 }
+
+/// Why a byte string is not a clue set.
+///
+/// Every variant is a refusal. There is no variant meaning "decoded, with a guess
+/// filled in": a clue set that had to be guessed at is not the clue set that was
+/// signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    /// The bytes end in the middle of something.
+    Truncated { field: &'static str },
+    /// Bytes left over after a complete clue set. Refused rather than ignored,
+    /// because a reader that ignored them would accept two different byte strings as
+    /// the same puzzle — and then [`Clues::canonical_bytes`] would no longer be the
+    /// single definition of these clues as bytes.
+    TrailingBytes(usize),
+    /// The number of lines does not match the dimensions: a board 8 wide must have
+    /// exactly 8 columns of clues. `Clues::of` can never produce such a thing, so
+    /// accepting one here would let a decoded puzzle be in a state no generated
+    /// puzzle can reach.
+    LineCountDisagreesWithDims {
+        axis: &'static str,
+        expected: usize,
+        found: u32,
+    },
+}
+
+impl Clues {
+    /// Read back what [`Clues::canonical_bytes`] wrote.
+    ///
+    /// This is what makes a package playable: a device receives bytes and needs the
+    /// puzzle. The two functions are each other's inverse, which
+    /// `tests/packaging.rs::clue_bytes_round_trip` holds them to — including for
+    /// clue sets with empty lines, which are the case an encoding without lengths
+    /// gets wrong.
+    ///
+    /// Strict on purpose. Anything it cannot read exactly is an error rather than a
+    /// best effort, because the bytes it is given have already been vouched for by a
+    /// signature: if they do not decode, something is wrong that guessing would hide.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = ByteReader { bytes, at: 0 };
+        let width = r.u16("width")?;
+        let height = r.u16("height")?;
+        let dims = Dims::new(width, height);
+
+        // Rows first, then columns, in the order `canonical_bytes` writes them. The
+        // expected count comes from the dimensions rather than from the file, so a
+        // stated count that disagrees is a refusal and not a new shape.
+        let rows = r.lines("rows", usize::from(height))?;
+        let columns = r.lines("columns", usize::from(width))?;
+
+        let remaining = r.bytes.len().saturating_sub(r.at);
+        if remaining != 0 {
+            return Err(DecodeError::TrailingBytes(remaining));
+        }
+
+        Ok(Clues {
+            dims,
+            rows,
+            columns,
+        })
+    }
+}
+
+/// A cursor that cannot read past the end of its slice, naming the field it was
+/// reading when it ran out.
+struct ByteReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl ByteReader<'_> {
+    fn take(&mut self, n: usize, field: &'static str) -> Result<&[u8], DecodeError> {
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or(DecodeError::Truncated { field })?;
+        let slice = self
+            .bytes
+            .get(self.at..end)
+            .ok_or(DecodeError::Truncated { field })?;
+        self.at = end;
+        Ok(slice)
+    }
+
+    fn u16(&mut self, field: &'static str) -> Result<u16, DecodeError> {
+        let b: [u8; 2] = self.take(2, field)?.try_into().expect("two bytes");
+        Ok(u16::from_le_bytes(b))
+    }
+
+    fn u32(&mut self, field: &'static str) -> Result<u32, DecodeError> {
+        let b: [u8; 4] = self.take(4, field)?.try_into().expect("four bytes");
+        Ok(u32::from_le_bytes(b))
+    }
+
+    /// One axis: a line count that must match the dimensions, then each line's runs.
+    fn lines(&mut self, axis: &'static str, expected: usize) -> Result<Vec<Runs>, DecodeError> {
+        let found = self.u32(axis)?;
+        if usize::try_from(found) != Ok(expected) {
+            return Err(DecodeError::LineCountDisagreesWithDims {
+                axis,
+                expected,
+                found,
+            });
+        }
+        let mut lines = Vec::with_capacity(expected);
+        for _ in 0..expected {
+            let run_count = usize::try_from(self.u32(axis)?)
+                .map_err(|_| DecodeError::Truncated { field: axis })?;
+            let mut runs = Runs::with_capacity(run_count);
+            for _ in 0..run_count {
+                runs.push(self.u16(axis)?);
+            }
+            lines.push(runs);
+        }
+        Ok(lines)
+    }
+}

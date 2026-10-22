@@ -75,6 +75,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features
       - run: cargo test --workspace --all-targets
+      # --all-targets skips doc tests, and one of them is a real check rather than
+      # an example: package::Opened documents that the type cannot be built outside
+      # its module, as a compile_fail block. Without this step that claim would be
+      # unenforced, which is the one thing this repository does not allow.
+      - run: cargo test --workspace --doc
 
   # The one job that checks our solver text against a real solver. Everything else
   # in this repository compares our work to our own work, so without this job the

@@ -13,6 +13,8 @@
 //! * [`verification`] — SAT / UNSAT / UNKNOWN, and the publication gate.
 //! * [`registry`] — the engine/game boundary.
 //! * [`content`] — artifact identity.
+//! * [`package`] — the published file: canonical bytes, bound to a fingerprint and
+//!   a signature, checked before anything in it is decoded.
 //! * [`platform_suite`] — the checks that must hold with no family installed.
 //!
 //! What is enforced, and by which test, is listed in
@@ -23,6 +25,7 @@
 pub mod content;
 pub mod dsl;
 pub mod hash;
+pub mod package;
 pub mod platform_suite;
 pub mod registry;
 pub mod report;

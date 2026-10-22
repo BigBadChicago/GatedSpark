@@ -32,11 +32,17 @@ The launch puzzle family is **Nonogram**, with **Slitherlink** as family two. Th
 reserves the Tier B global constraints Slitherlink needs, because freezing the DSL around local
 constraints is the one decision here that would be expensive to reverse.
 
-M3 (generation) and most of M4 (the validation report) now exist: a pattern generator feeds
-mechanical clue derivation, the solver decides what is accepted, and every accepted puzzle carries a
-report of the questions a solver was asked and what it answered. The generator is never a
-correctness oracle. One piece of M4 is deliberately missing: there is no content fingerprint yet, so
-nothing is publishable, and a test asserts that this is the only thing standing in the way.
+M3 (generation) and most of M4 now exist: a pattern generator feeds mechanical clue derivation,
+the solver decides what is accepted, every accepted puzzle carries a report of the questions a
+solver was asked and what it answered, and that report packs into a file a device can open and play
+from. The generator is never a correctness oracle.
+
+Two pieces of M4 are deliberately missing, and both are the same gap. There is no content
+fingerprint and no signature, because neither should be hand-written and the environment this was
+built in could not reach the package registry. So a package can be written and read back, and
+every refusal around it is tested, but it is not yet tamper-proof: the strength arrives with the
+reviewed implementations, not with more of our own code. A test asserts that the missing
+fingerprint is the only thing standing between a good report and publication.
 
 What exists and is enforced by a test is listed in
 [`docs/adr/0003-engine-game-boundary.md`](docs/adr/0003-engine-game-boundary.md). Nothing in this
