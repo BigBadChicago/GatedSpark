@@ -70,6 +70,14 @@ The honest qualification: this is enforced **in CI**, not everywhere. On a machi
 no solver the test prints that it verified nothing and returns, which is a convenience
 for contributors and would be a vacuous pass in CI — hence the environment variable.
 
+### Windows builds (added 2026-10-22, see ADR 0005)
+
+| Claim | Enforcing test |
+|---|---|
+| The toolchain the Windows wrapper picks is the GNU one, which brings its own linker | the `windows` CI job: `scripts\windows\cargo.cmd --version --verbose` must report a `x86_64-pc-windows-gnu` host |
+| The whole workspace compiles and its tests pass under that toolchain | same job, `scripts\windows\cargo.cmd test --workspace --all-targets` |
+| The pinned version is written down once, not twice | the wrapper reads `channel` out of `rust-toolchain.toml` and refuses to run if the line is missing, so a drifted copy cannot exist |
+
 Explicitly **not yet enforced**, and labelled as such in the code:
 
 - **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
@@ -81,6 +89,12 @@ Explicitly **not yet enforced**, and labelled as such in the code:
   it cannot execute. What is missing is only the CI step that installs CVC5; it is left
   out rather than guessed at, because an unverified download step would simply turn CI
   red. Until that step exists, the cross-check is available but not exercised.
+- **A Windows build on a machine with no Visual Studio.** The `windows` job proves the GNU
+  toolchain builds and tests the workspace; it cannot prove the absence of `link.exe`, because
+  GitHub's Windows runners ship with the Microsoft Build Tools and a job cannot honestly
+  uninstall them. That the GNU target never calls `link.exe` follows from the target triple.
+  The one real observation behind this is the failure on the project's own Windows machine on
+  2026-10-22, which is evidence rather than a test.
 - **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
   They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
   walks the tree in the meantime, and is the reference the checkpointed version will be tested

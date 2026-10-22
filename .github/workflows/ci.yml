@@ -63,3 +63,32 @@ jobs:
         env:
           GATEDSPARK_REQUIRE_SOLVER: "1"
         run: cargo test -p gs-nonogram --test solver_agreement -- --nocapture
+
+  # Windows is built with the GNU toolchain, which ships its own linker, so the
+  # repository builds on a stock Windows machine that has only rustup installed.
+  # The pinned "msvc" default borrows link.exe from Visual Studio or the Microsoft
+  # Build Tools, and fails outright when neither is present. Decided 2026-10-22;
+  # see docs/adr/0005-windows-gnu-toolchain.md.
+  #
+  # What this job proves: the wrapper picks a toolchain whose host triple is
+  # `*-windows-gnu`, and the whole workspace compiles and its tests pass under it.
+  # What it does not prove: that the build would work on a machine with no Visual
+  # Studio at all. GitHub's Windows runners come with the Build Tools installed and
+  # there is no honest way to uninstall them inside a job, so that part rests on the
+  # target triple rather than on a test. ADR 0003 records it that way.
+  windows:
+    name: windows builds with its own linker
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the GNU toolchain the wrapper asks for
+        shell: cmd
+        run: scripts\windows\cargo.cmd --version
+      - name: The chosen toolchain is the GNU one
+        shell: cmd
+        run: |
+          scripts\windows\cargo.cmd --version --verbose
+          scripts\windows\cargo.cmd --version --verbose | findstr /c:"host: x86_64-pc-windows-gnu" || exit /b 1
+      - name: Build and test the workspace
+        shell: cmd
+        run: scripts\windows\cargo.cmd test --workspace --all-targets

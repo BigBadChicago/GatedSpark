@@ -3,3 +3,9 @@
 [toolchain]
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
+
+# On Windows this channel resolves to the "msvc" toolchain, which has no linker of
+# its own and needs Visual Studio or the Microsoft Build Tools. Rustup cannot pick a
+# different toolchain per operating system, so Windows builds go through
+# scripts/windows/cargo.cmd, which reads the channel above and uses the GNU
+# toolchain. See docs/adr/0005-windows-gnu-toolchain.md.
