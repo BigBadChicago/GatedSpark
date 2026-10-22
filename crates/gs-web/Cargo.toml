@@ -45,5 +45,10 @@ gs-nonogram = { path = "../gs-nonogram" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.129"
 
+# The browser test harness, for the one test that cannot be run any other way. Same
+# version as above, and same reason: there is no second option.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.79"
+
 [lints]
 workspace = true

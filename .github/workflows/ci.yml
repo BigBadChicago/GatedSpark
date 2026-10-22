@@ -110,6 +110,26 @@ jobs:
           raw=$(stat -c%s target/wasm32-unknown-unknown/release/gs_web.wasm)
           gz=$(gzip -c target/wasm32-unknown-unknown/release/gs_web.wasm | wc -c)
           echo "browser module: $((raw / 1024)) KB, $((gz / 1024)) KB compressed"
+      # And the part compiling cannot prove: that it works in a browser. This runs the
+      # crate's `in_a_real_browser` tests inside headless Chrome, which is the only way
+      # to check that `wasm_bindgen` really carries a byte array in and a string out, and
+      # that real SHA-256 and real Ed25519 give the same answers in a browser's
+      # WebAssembly engine as they do natively.
+      #
+      # The runner's version must match the `wasm-bindgen` dependency, and ChromeDriver's
+      # must match Chrome's. Both are printed before the tests run, because a mismatch in
+      # either reads as a broken test rather than a setup problem.
+      - name: Install the browser test runner
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Show the browser and driver versions
+        run: |
+          wasm-bindgen --version
+          chromedriver --version
+          google-chrome --version
+      - name: The browser crate works in a real browser
+        env:
+          CHROMEDRIVER: /usr/bin/chromedriver
+        run: cargo test -p gs-web --target wasm32-unknown-unknown --test in_a_real_browser
 
   # The one job that checks our solver text against a real solver. Everything else
   # in this repository compares our work to our own work, so without this job the

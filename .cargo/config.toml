@@ -1,0 +1,12 @@
+# How `cargo test --target wasm32-unknown-unknown` runs a test: by handing it to a real
+# browser. Without this line, cargo would try to execute a `.wasm` file as a program and
+# fail in a way that looks like a broken test rather than a missing setup.
+#
+# The runner comes from `wasm-bindgen-cli`, whose version must match the `wasm-bindgen`
+# dependency in `crates/gs-web/Cargo.toml`. A mismatch is reported clearly by the runner
+# itself, which is the one piece of luck in this setup.
+#
+# It also needs a browser and a driver, found through the usual environment variables
+# (CHROMEDRIVER, GECKODRIVER). README's browser section says how.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

@@ -150,10 +150,29 @@ One consequence kept on purpose: **nothing in the browser can produce a random n
 crate that wanted randomness was the key generator, and the browser neither generates puzzles nor
 signs anything.
 
-The reasoning is in
-[`docs/adr/0009-the-browser-version.md`](docs/adr/0009-the-browser-version.md), including the one
-thing it does not prove: that the translation layer works in a real browser. That needs a headless
-browser, and is recorded as not enforced rather than implied.
+### Running the browser test
+
+One test in `gs-web` runs inside a real browser, because "compiles for a browser" and "works in a
+browser" are different claims. It needs three things that match each other:
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.129   # must match the wasm-bindgen dependency
+rustup target add wasm32-unknown-unknown
+CHROMEDRIVER=$(which chromedriver) \
+    cargo test -p gs-web --target wasm32-unknown-unknown --test in_a_real_browser
+```
+
+ChromeDriver's version has to match the browser's, and `wasm-bindgen-cli`'s has to match the
+`wasm-bindgen` dependency. Both mismatches read as a broken test rather than a setup problem, which
+is why CI prints all three versions before running anything.
+
+It is one file and deliberately not how this crate is tested: a test that needs a browser is a test
+that will eventually be skipped, so the native suite stays the measurement. This covers the narrow
+claim no native test can make — that the translation layer really carries data in and out, and that
+real SHA-256 and real Ed25519 give the same answers in a browser's WebAssembly engine.
+
+The reasoning for all of it is in
+[`docs/adr/0009-the-browser-version.md`](docs/adr/0009-the-browser-version.md).
 
 ## Building
 

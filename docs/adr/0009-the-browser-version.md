@@ -152,13 +152,34 @@ that will eventually be skipped.
 | Every refusal explains itself without showing a type name | `loading::every_refusal_explains_itself_in_words_a_person_can_read` |
 | The browser does not re-decide publication | `loading::a_replay_that_was_never_reproduced_still_loads_but_is_visible` |
 
+| The translation layer works in a real browser | `in_a_real_browser::*`, six tests inside headless Chrome |
+
+### On the browser test
+
+This was written up as *not enforced* when the crate was first built, with a headless-browser test
+named as the next thing needed. It was then written, because a gap recorded in an ADR is a gap that
+ships.
+
+It is one file and deliberately not the way this crate is tested. A test needing a browser needs a
+matching browser, driver and `wasm-bindgen-cli`, and a test that cannot run is a test that will
+eventually be skipped. So the native suite stays the measurement and this is the narrow claim no
+native test can make: that `wasm_bindgen` really carries a byte array in from a page and a string
+back out, that real SHA-256 and real Ed25519 give the same answers inside a browser's WebAssembly
+engine as they do natively, and that a stranger's puzzle is refused there too.
+
+It runs in `run_in_browser` mode rather than under Node on purpose. Node has a filesystem and a
+process model, so a test passing there would say little about the place this code is meant to run.
+
+One thing it shows that is worth stating: generating a puzzle, deriving its clues, replaying the
+answer and signing the result are all pure computation, so the test builds its own signed package
+inside the browser. What a browser cannot do is ask a *solver* — which is the entire reason
+`gs-solver` is not allowed in this crate.
+
 ### Not enforced
 
-- **That the translation layer works in a real browser.** Everything above is tested on an
-  ordinary machine, and the browser build is only compiled. `src/browser.rs` is deliberately thin
-  enough to read in full for exactly this reason, but "thin enough to read" is not a test. A
-  headless-browser test is the next thing this crate needs, and is called out here rather than
-  left to be noticed.
+- **Every byte of a package, in a browser.** The browser test changes four bytes; the exhaustive
+  version runs natively. A browser test is slow, and the claim being made here is that the digest
+  behaves the same, not that the byte loop works twice.
 - **That `Playable` has no other constructor.** True today and checked by reading;
   `loading::the_browser_has_no_way_to_build_a_playable_puzzle_without_loading_one` records the
   claim but cannot prove a negative. Unlike `Opened`, `Playable` is not sealed by a private field,

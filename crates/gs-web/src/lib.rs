@@ -44,7 +44,7 @@ use gs_nonogram::clues::{Clues, DecodeError, Runs};
 use gs_nonogram::rules::{FAMILY, RULESET_VERSION};
 
 #[cfg(target_arch = "wasm32")]
-mod browser;
+pub mod browser;
 
 /// Why a package cannot be played here.
 ///

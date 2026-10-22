@@ -219,6 +219,7 @@ there are players. The thresholds are provisional and the module says so.
 | Every single changed byte of a package is refused by the browser | `loading::every_single_changed_byte_is_refused` |
 | The browser refuses another family's puzzle, or another rules version, rather than attempting it | `loading::another_games_puzzle_is_refused_rather_than_attempted`, `..._a_puzzle_from_different_rules_is_refused_in_either_direction` |
 | A `Playable` can only be obtained by loading a verified package | structural: `load` is the only function returning one; recorded in ADR 0009's not-enforced list, since a negative cannot be proved |
+| The browser's translation layer works in a real browser | `in_a_real_browser::*`, six tests in headless Chrome, run in CI |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
@@ -253,10 +254,6 @@ Explicitly **not yet enforced**, and labelled as such in the code:
   uninstall them. That the GNU target never calls `link.exe` follows from the target triple.
   The one real observation behind this is the failure on the project's own Windows machine on
   2026-10-22, which is evidence rather than a test.
-- **That the browser's translation layer works in a real browser.** Everything in `gs-web` is
-  tested on an ordinary machine, and CI compiles the browser build without running it.
-  `src/browser.rs` is deliberately thin enough to read in full, but that is not a test. A
-  headless-browser test is the next thing the crate needs; see ADR 0009.
 - **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
   They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
   walks the tree in the meantime, and is the reference the checkpointed version will be tested
