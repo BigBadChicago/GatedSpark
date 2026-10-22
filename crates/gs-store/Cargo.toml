@@ -1,0 +1,17 @@
+[package]
+name = "gs-store"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The on-disk store of published puzzles: the file a player gets, and the answer that never leaves our side."
+
+[lints]
+workspace = true
+
+[dependencies]
+gs-core = { path = "../gs-core" }
+
+[dev-dependencies]
+gs-crypto = { path = "../gs-crypto" }
+gs-nonogram = { path = "../gs-nonogram" }

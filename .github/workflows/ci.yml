@@ -112,4 +112,14 @@ jobs:
         env:
           GATEDSPARK_REQUIRE_SOLVER: "1"
         run: cargo test -p gs-nonogram --test solver_agreement -- --nocapture
+      # M5's exit test, run for real: an empty folder becomes a signed, Z3-verified,
+      # replayable puzzle, `show` reads its report back out of the signed bytes, and
+      # `recheck` fails on a single flipped byte of the stored answer. Every other test
+      # in this repository checks a part; this is the one that checks that the parts are
+      # connected, and it is the only place the whole pipeline runs against a real
+      # solver. Under GATEDSPARK_REQUIRE_SOLVER=1 it cannot quietly skip.
+      - name: The whole loop, with a real solver
+        env:
+          GATEDSPARK_REQUIRE_SOLVER: "1"
+        run: cargo test -p gs-cli --test command -- --nocapture
 

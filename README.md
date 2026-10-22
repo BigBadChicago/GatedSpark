@@ -14,13 +14,17 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 |---|---|
 | `crates/gs-core` | The shared deterministic core: the puzzle DSL, logical state, transition semantics, the branching timeline, replay, and the platform's verification vocabulary. |
 | `crates/gs-nonogram` | The launch puzzle family: clues, rules, the line solver, the difficulty feature vector, and the SMT-LIB2 encoding a real solver reads. |
+| `crates/gs-crypto` | The workspace's only cryptography: SHA-256 for the content fingerprint, Ed25519 for the signature. |
+| `crates/gs-solver` | Runs a real SMT solver as a separate program and turns every failure into "nobody knows". |
+| `crates/gs-store` | The puzzle store: a plain folder of plain files, one folder per puzzle, named by the puzzle's fingerprint. |
+| `crates/gs-cli` | The `gatedspark` command: make a key, fill a store, read a report, re-check the lot. |
 | `docs/adr/` | Architecture decision records, including the language, solver and toolchain choices. |
 | `scripts/` | One-time setup for Windows machines. See *On Windows, run the setup script once* below. |
 
 The project's foundation documents, the build plan for this slice, and the content-delivery design
 live in the project's shared folder rather than in the repository.
 
-## Current state: milestones M0 to M2
+## Current state: M5 is under way
 
 M0 was the repository and its test harness. M1 is the deterministic core: the DSL, logical state,
 `S(t+1) = F(S(t), A(t), R)`, state hashing, undo and redo with branching, and replay against
@@ -56,6 +60,60 @@ What exists and is enforced by a test is listed in
 [`docs/adr/0003-engine-game-boundary.md`](docs/adr/0003-engine-game-boundary.md). Nothing in this
 repository claims to be enforced without naming the test that enforces it; where something is not
 yet enforced, it says so.
+
+M5 is being built in three pieces. The first two exist. Piece one made a solver answerable from
+shipped code rather than from a test file: `gs-solver` runs a solver as a separate program and
+turns *every* failure — a solver that will not start, dies, runs out of time, prints nothing,
+prints something unparseable, or prints two contradictory answers — into "nobody knows", never into
+"the puzzle is unique". The reasoning is in
+[`docs/adr/0007-running-a-real-solver.md`](docs/adr/0007-running-a-real-solver.md).
+
+Piece two is the store and the command, described in the next section. Piece three is the browser
+version: the core compiled to WebAssembly, so the same verified code runs on the web and later on a
+desktop.
+
+## One command, end to end
+
+M5's point is a single sentence that can be run: an empty folder becomes signed, solver-verified,
+playable puzzles, and a second command can check them later.
+
+```bash
+# A development signing key. It refuses to write inside a Git working tree.
+cargo run -p gs-cli -- keygen --out ~/gatedspark-dev.key
+
+# Generate, ask Z3 about each candidate, and keep only the ones it vouches for.
+cargo run -p gs-cli -- fill --store ./store --key ~/gatedspark-dev.key --count 2
+
+# Read one puzzle's report, out of the signed file itself.
+cargo run -p gs-cli -- show --store ./store --key ~/gatedspark-dev.key <puzzle name>
+
+# Re-open every puzzle: recompute its fingerprint, check its signature, and check its
+# stored answer against the fingerprint inside the signed report.
+cargo run -p gs-cli -- recheck --store ./store --key ~/gatedspark-dev.key
+```
+
+A store looks like this, and nothing but the puzzle's own fingerprint names a puzzle:
+
+```text
+store/
+  9890887818e3d290e6a58b4b06b159b6452dd90473a34b5cc4a0e2fddb974813/
+    package.gspk      the signed package: the puzzle, its report, its signature
+    witness.bin       the answer, in the form the game agrees on
+```
+
+Three refusals are worth knowing about, because they are the reason the commands can be believed:
+
+- **`fill` checks the solver before it starts.** On a machine with no solver it says so, in those
+  words, instead of running for a long time and reporting every puzzle refused for an undecided
+  query. Nothing can be published without a solver, and nothing here pretends otherwise.
+- **`fill` says when it came up short.** A level it could not fill prints the shortfall rather than
+  quietly delivering fewer puzzles than asked.
+- **`recheck` prints how many it checked, first and always.** An empty store is told it is empty.
+  A run that printed only "every signature checks out" would read as a clean bill of health for an
+  empty directory, which is exactly the shape of a check that passes while checking nothing.
+
+The store and the command, and what each refusal is for, are in
+[`docs/adr/0008-the-store-and-the-command.md`](docs/adr/0008-the-store-and-the-command.md).
 
 ## Building
 

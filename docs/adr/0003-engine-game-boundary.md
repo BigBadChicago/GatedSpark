@@ -203,6 +203,16 @@ there are players. The thresholds are provisional and the module says so.
 | A verdict is a whole line, so `unsat` is never read as `sat` | `external_solver::the_word_unsat_inside_a_sentence_is_not_a_refutation`, verified by mutation; and against a real solver's own error output by `real_solver::a_real_solvers_error_output_is_never_mistaken_for_a_verdict` |
 | A solver's time limit is real, and the runner cannot deadlock waiting for one | `external_solver::a_solver_that_never_finishes_is_killed_and_reported_as_a_timeout` and `..._a_very_talkative_solver_does_not_deadlock` |
 | CI's one outside-the-building job checks the runner that ships, not a copy of it | structural: `solver_agreement.rs` drives `gs_solver::ExternalSolver`; see ADR 0007 |
+| Nothing reaches the store that the store cannot verify itself | `store::a_package_the_store_cannot_verify_never_reaches_the_disk`, `..._a_package_signed_by_an_untrusted_key_is_refused` |
+| A stored puzzle is named by its own fingerprint, and the name is checked against it | structural: `Store::put` is not given an id and `ContentId` has no constructor from bytes; `store::the_directory_is_named_by_the_content_id_and_holds_the_two_files`, `..._a_renamed_directory_is_a_refusal_rather_than_a_different_puzzle` |
+| A stored answer that disagrees with the signed report is caught | `store::an_answer_that_does_not_match_the_signed_report_is_refused`, `..._an_answer_swapped_on_disk_after_the_fact_is_caught_on_the_way_out` |
+| A puzzle whose answer was never replayed is not kept | `store::a_package_with_no_replayed_answer_is_refused` |
+| A half-written puzzle is never served, listed or counted | `store::a_half_written_puzzle_is_not_a_puzzle` |
+| A re-check of an empty store reports that it verified nothing | `command::recheck_on_an_empty_store_says_it_verified_nothing` |
+| A missing solver is reported as a missing solver, and nothing is stored | `command::a_missing_solver_is_reported_as_a_missing_solver` |
+| A mistyped option is an error rather than a silently ignored default | `command::a_misspelled_option_is_an_error_rather_than_being_ignored`, `..._an_option_with_no_value_is_an_error_rather_than_a_guess` |
+| A development signing key cannot be written into a repository or overwrite another | `command::keygen_refuses_to_write_inside_a_git_repository_and_writes_nothing`, `..._keygen_never_overwrites_an_existing_key`, `..._two_keys_are_different_keys` |
+| An empty folder becomes signed, solver-verified, replayable puzzles | `command::an_empty_folder_becomes_signed_verified_puzzles_and_then_rechecks`, against a real solver in CI |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
