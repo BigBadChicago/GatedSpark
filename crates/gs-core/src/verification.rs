@@ -41,6 +41,32 @@ impl Outcome {
     }
 }
 
+/// Something that can answer an SMT-LIB2 query.
+///
+/// The one rule: **never guess.** Returning [`Outcome::Unknown`] is a legitimate
+/// answer and an implementation is expected to use it for a timeout, a crash, output
+/// it could not parse, or a solver that would not start at all. What it must never do
+/// is turn any of those into [`Outcome::Unsat`], which would make a missing dependency
+/// look like a proof — and `Unsat` on the uniqueness query is the single claim this
+/// whole platform exists to make.
+///
+/// **No implementation in this crate.** Running a solver means launching a program,
+/// which belongs to whatever is driving the pipeline. The real one is in `gs-solver`.
+/// Two things follow, both deliberate: nothing in the core or in a puzzle family can
+/// quietly answer its own questions, since the only way to obtain an `Outcome` is to
+/// be handed one; and a caller can pass in two independent solvers and compare, which
+/// is the ADR 0002 cross-check.
+///
+/// It lives here rather than beside a particular puzzle family because an SMT-LIB2
+/// query is a string and this trait says nothing about Nonogram. `gs_nonogram::publish`
+/// re-exports it, which is where it used to live.
+pub trait Verifier {
+    /// A name for the report, such as the solver and its version.
+    fn name(&self) -> &'static str;
+    /// Ask one query.
+    fn ask(&self, query: &str) -> Outcome;
+}
+
 /// Why a candidate was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {

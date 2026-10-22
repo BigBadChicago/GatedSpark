@@ -69,6 +69,14 @@ The toolchain is pinned in `rust-toolchain.toml`. Building needs the package reg
 policy blocks `static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
 [`docs/adr/0004-dependencies.md`](docs/adr/0004-dependencies.md).
 
+M5 has started. `gs-solver` is the first piece: the code that actually runs a solver, as a separate
+program speaking SMT-LIB2. Its one rule is that **every failure is an `UNKNOWN`** — a solver that
+will not start, dies, times out, or prints something unreadable is "nobody knows", never a
+refutation — because `UNSAT` on the uniqueness query is the one claim this whole platform makes. See
+[`docs/adr/0007-running-a-real-solver.md`](docs/adr/0007-running-a-real-solver.md). The test that
+compares our encoding against a real solver now drives that code rather than a copy of it, so CI's
+one outside-the-building job checks what ships.
+
 ### The solver check is skipped unless a solver is installed
 
 `cargo test --workspace` compares this code against this code. Exactly one test compares it against
