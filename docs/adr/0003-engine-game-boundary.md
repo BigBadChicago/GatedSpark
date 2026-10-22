@@ -57,12 +57,30 @@ passing for nothing.
 | An empty conjunction is local, not global | `dsl_tiers::an_empty_conjunction_is_local_and_says_so` |
 | A cell's value cannot be a float | `state::assert_integer_only::<CellRepr>()`, a compile-time binding to a sealed trait with no float implementation |
 
+### Solver agreement (added after the first real solver run)
+
+| Claim | Enforcing test |
+|---|---|
+| A real solver reaches the verdict our line solver predicted, on every fixture | `solver_agreement::a_real_solver_agrees_with_our_line_solver`, **in the `solver` CI job only** |
+| A uniquely-solvable puzzle's re-query is UNSAT, and an ambiguous one's is SAT | same test, via the `ambiguous 2x2` control fixture |
+| A missing solver fails rather than skips in CI | the `GATEDSPARK_REQUIRE_SOLVER=1` branch in `solvers()`; verified by running the test with and without it |
+| A misconfigured second solver cannot silently disable the cross-check | `solver_agreement::an_unrunnable_second_solver_is_an_error_not_a_quiet_single_check` |
+
+The honest qualification: this is enforced **in CI**, not everywhere. On a machine with
+no solver the test prints that it verified nothing and returns, which is a convenience
+for contributors and would be a vacuous pass in CI — hence the environment variable.
+
 Explicitly **not yet enforced**, and labelled as such in the code:
 
 - **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
 - **`f64: !IntegerOnly` at runtime.** Rust cannot assert a negative implementation without an extra
   dependency. The trait is sealed, which carries that half structurally, and the clippy lint covers
   arithmetic regardless.
+- **The CVC5 cross-check from ADR 0002.** The test supports it today through
+  `GATEDSPARK_SMT_SOLVER_2`, and refuses to run quietly if that variable names a program
+  it cannot execute. What is missing is only the CI step that installs CVC5; it is left
+  out rather than guessed at, because an unverified download step would simply turn CI
+  red. Until that step exists, the cross-check is available but not exercised.
 - **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
   They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
   walks the tree in the meantime, and is the reference the checkpointed version will be tested
