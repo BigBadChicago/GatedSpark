@@ -25,6 +25,7 @@ pub mod dsl;
 pub mod hash;
 pub mod platform_suite;
 pub mod registry;
+pub mod report;
 pub mod ruleset;
 pub mod state;
 pub mod timeline;

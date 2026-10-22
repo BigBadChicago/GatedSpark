@@ -70,6 +70,99 @@ The honest qualification: this is enforced **in CI**, not everywhere. On a machi
 no solver the test prints that it verified nothing and returns, which is a convenience
 for contributors and would be a vacuous pass in CI — hence the environment variable.
 
+### Generation (M3, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| A seed rebuilds its board exactly | `generation::a_seed_rebuilds_the_same_pattern`, and `generation_rng::the_stream_from_a_seed_is_pinned` underneath it |
+| A block of seeds rebuilds the same candidates and the same report | `generation::the_same_block_of_seeds_gives_the_same_candidates` |
+| One round of the automaton does not depend on scan order | `generation::smoothing_is_not_order_dependent`; structurally, `smooth` is double-buffered |
+| The clues a candidate carries are satisfied by the answer a solver finds, with no reference to the board they came from | `generation::a_candidates_clues_describe_its_own_board` |
+| Nothing ambiguous or undecided is ever returned as a candidate | `generation::nothing_accepted_is_ambiguous_or_undecided` |
+| No seed is lost between the counts | `Report::is_consistent`, asserted in `generation::nothing_accepted_is_ambiguous_or_undecided` and `the_yield_is_measured_and_printed` |
+| A real solver agrees with the filter on puzzles the generator **kept** and on ones it **threw out as ambiguous** | `solver_agreement::a_real_solver_agrees_with_our_line_solver`, generated fixtures, **in the `solver` CI job only** |
+| The generator cannot become the verifier | structural: `generate` returns a `Candidate`, and neither it nor `Features` has any conversion to `verification::Outcome` |
+| A yield is measured, never asserted from a stored number | `generation::the_yield_is_measured_and_printed` prints the counts and asserts only that they add up and that the generator produces something |
+
+### Nonogram's difficulty levels (added 2026-10-22)
+
+The levels are the game's to define, not the platform's, so they live in
+`gs-nonogram::difficulty` and `gs-core` still has no notion of a band.
+
+| Claim | Enforcing test |
+|---|---|
+| Every level can actually be produced, by generating at its own declared shape | `difficulty::every_band_is_reachable_by_generating_at_its_own_shape` |
+| The level list is not empty, so the tests above are not iterating nothing | `difficulty::there_is_at_least_one_band` |
+| No puzzle is claimed by two levels, so `band_of` does not depend on list order | `difficulty::no_two_bands_claim_the_same_puzzle` |
+| The list is ordered easier to harder, which is the order a menu would show | `difficulty::bands_are_ordered_from_easier_to_harder` |
+| A puzzle needing a guess is in no level at all | `difficulty::a_puzzle_needing_a_guess_is_in_no_band` |
+| A puzzle outside every window is ungraded rather than squeezed into the nearest level | `difficulty::a_puzzle_outside_every_window_is_ungraded_rather_than_squeezed_in` |
+| A level is a board size *and* a window; features alone cannot claim one | `difficulty::a_puzzle_of_the_wrong_size_is_not_claimed` |
+| Asking for one level never returns a puzzle from another | `difficulty::asking_for_one_band_never_returns_another` |
+| Each level's shape has a workable yield, so no level is reachable in theory and empty in practice | `difficulty::every_bands_shape_is_one_the_generator_accepts` |
+| Each level generates from its own shape rather than competing with another's | `difficulty::the_shapes_are_distinct_so_each_band_has_its_own_production` |
+
+Explicitly **not** enforced, and the honest limit of all of the above: that a player
+would agree with the ordering. No play data exists. The tests prove the levels are
+reachable, distinct and ordered by measured solver work; they cannot prove the
+mapping to the words a player reads is right, and that stays an informed guess until
+there are players. The thresholds are provisional and the module says so.
+
+### The batch worker (M3, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| The same request produces the same puzzles in the same order | `worker::the_same_request_produces_the_same_puzzles` |
+| A quota that cannot be filled stops at the seed limit and reports the shortfall | `worker::an_impossible_quota_stops_and_says_so_rather_than_running_forever` |
+| Every puzzle delivered belongs to the level it was asked for | `worker::every_puzzle_produced_is_in_the_level_it_was_asked_for` |
+| Every puzzle delivered still has exactly one answer, checked end to end | `worker::every_puzzle_produced_still_has_exactly_one_answer` |
+| No run contains the same puzzle twice | `worker::no_two_puzzles_in_a_run_are_the_same` |
+| The duplicate check is reached rather than being a counter nothing increments | `worker::the_duplicate_check_is_not_dead_code`, which names the measured colliding seed pair |
+| A recorded seed rebuilds its own puzzle, so a validation report means something | `worker::a_candidate_can_be_rebuilt_from_its_recorded_seed` |
+| Nothing in the worker reads a clock | structural: no time source is imported, and `BandOutcome` records seeds rather than durations |
+| Two clue sets have equal bytes exactly when they are equal | `Clues::canonical_bytes`, with lengths before contents so the encoding cannot be ambiguous |
+
+### The validation report (M4, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| A complete report is publishable, so the tests below are not vacuous | `validation_report::a_complete_report_is_publishable` |
+| A report that asked nothing refuses rather than defaulting to yes | `validation_report::a_report_with_no_queries_refuses_rather_than_defaulting_to_yes` |
+| An undecided query is never a pass, at the report layer as well as the gate | `validation_report::an_undecided_query_is_not_a_pass` |
+| An undecided query stays findable in a report refused for some other reason | `validation_report::an_undecided_query_is_still_findable_in_a_report_refused_for_another_reason` |
+| A decisive wrong answer is not recorded as an undecided one | `validation_report::a_puzzle_with_two_answers_is_not_publishable` |
+| A witness the engine refused blocks publication | `validation_report::a_witness_the_engine_refused_is_not_publishable` |
+| A witness never replayed also blocks it, distinctly from one refused | `validation_report::a_witness_never_replayed_is_not_publishable_either` |
+| No content id means nothing can be published | `validation_report::a_report_with_no_content_id_is_not_publishable` |
+| A missing difficulty measurement is not a zero | `validation_report::a_missing_measurement_is_not_a_zero` |
+| A puzzle the game grades into no level is recorded as ungraded, not given one | `validation_report::an_ungraded_puzzle_is_recorded_as_ungraded` |
+| The encoding a uniqueness claim is relative to is recorded | `validation_report::the_encoding_a_uniqueness_claim_is_relative_to_is_recorded` |
+| The report does not re-decide publication | structural: `publishable` calls `verification::decide`, so the report and the gate are one judgement |
+| The report reads no clock | structural: there is no timestamp field, so a stored record cannot depend on the reader's clock |
+
+### The whole pipeline, end to end (M4, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| The worker's output, asked about by a real solver, agrees with our filter on every puzzle | `solver_agreement::the_whole_pipeline_produces_reports_a_real_solver_agrees_with`, **in the `solver` CI job only** |
+| The only thing stopping a good report from being publishable is the missing content id | same test, and `publishing::the_only_thing_standing_between_a_good_report_and_publication_is_the_missing_digest` |
+| A solver that could not be run becomes `UNKNOWN`, never `UNSAT` | the `Answer`-to-`Outcome` mapping in `SolverAsVerifier`; a broken solver must not become a proof |
+| A solver timeout is recorded and refused, not retried or reinterpreted | `publishing::a_solver_timeout_is_recorded_and_refused_not_retried` |
+| A solver disagreeing with our filter is recorded as disagreeing, with the solver's answer kept | `publishing::a_solver_that_disagrees_with_the_filter_is_recorded_as_disagreeing` |
+| Nobody knowing is not counted as agreement | `publishing::an_undecided_solver_answer_is_not_agreement` |
+| Solvability is asked before uniqueness, since uniqueness needs the witness | `publishing::the_uniqueness_query_is_the_second_one_asked` |
+| The witness is replayed through the engine's own goal test, not re-checked locally | `publishing::the_witness_is_replayed_through_the_engine`; `replay_of` calls `Ruleset::is_solved` |
+| Two reports for the same candidate are identical, so a re-verification can diff them | `publishing::two_reports_for_the_same_candidate_are_identical` |
+| This crate cannot answer its own solver questions | structural: `Verifier` is a trait with no implementation in the crate, so an `Outcome` can only arrive from outside |
+
+### Windows builds (added 2026-10-22, see ADR 0005)
+
+| Claim | Enforcing test |
+|---|---|
+| A Windows build runs on the gnu host, which brings its own linker | the `windows` CI job asserts `rustc -vV` reports `host: x86_64-pc-windows-gnu`, rather than printing it for a human to read |
+| The whole workspace compiles and its tests pass on that host | same job, `cargo test --workspace --all-targets` |
+| The pinned version is written down once, not twice | `scripts/setup-windows.ps1` and the CI job both read `channel` out of `rust-toolchain.toml`; neither names a version |
+
 Explicitly **not yet enforced**, and labelled as such in the code:
 
 - **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
@@ -81,6 +174,12 @@ Explicitly **not yet enforced**, and labelled as such in the code:
   it cannot execute. What is missing is only the CI step that installs CVC5; it is left
   out rather than guessed at, because an unverified download step would simply turn CI
   red. Until that step exists, the cross-check is available but not exercised.
+- **A Windows build on a machine with no Visual Studio.** The `windows` job proves the GNU
+  toolchain builds and tests the workspace; it cannot prove the absence of `link.exe`, because
+  GitHub's Windows runners ship with the Microsoft Build Tools and a job cannot honestly
+  uninstall them. That the GNU target never calls `link.exe` follows from the target triple.
+  The one real observation behind this is the failure on the project's own Windows machine on
+  2026-10-22, which is evidence rather than a test.
 - **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
   They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
   walks the tree in the meantime, and is the reference the checkpointed version will be tested

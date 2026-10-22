@@ -34,11 +34,17 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
+use gs_core::report::NotPublishable;
 use gs_core::state::Dims;
+use gs_core::verification::Outcome;
 use gs_nonogram::clues::{Clues, Pattern};
+use gs_nonogram::difficulty::BANDS;
+use gs_nonogram::generate::{batch, pattern, propose, Rejected, Shape};
+use gs_nonogram::publish::{filter_and_solver_agree, report_for};
 use gs_nonogram::rules::Nonogram;
 use gs_nonogram::smtlib::{solvability_query, uniqueness_query};
 use gs_nonogram::solve::{solve, Budget, Solved};
+use gs_nonogram::worker::{run, Limits, Quota};
 
 /// What a solver said. Mirrors `gs_core::verification::Outcome`, kept separate here
 /// because this runner is test scaffolding and must not become the engine's verifier.
@@ -158,7 +164,7 @@ fn runnable(program: &str) -> bool {
 
 /// A fixture, and what our own line solver concluded about it.
 struct Fixture {
-    label: &'static str,
+    label: String,
     puzzle: Nonogram,
 }
 
@@ -167,20 +173,20 @@ fn fixtures() -> Vec<Fixture> {
         Pattern::from_rows(&["..#..", "..#..", "#####", "..#..", "..#.."]).expect("rectangular");
     let picture = Pattern::from_rows(&["##.", ".#.", ".##"]).expect("rectangular");
 
-    vec![
+    let mut written = vec![
         Fixture {
-            label: "cross 5x5, uniquely solvable",
+            label: "cross 5x5, uniquely solvable".to_string(),
             puzzle: Nonogram::new(Clues::of(&cross)),
         },
         Fixture {
-            label: "small picture 3x3",
+            label: "small picture 3x3".to_string(),
             puzzle: Nonogram::new(Clues::of(&picture)),
         },
         Fixture {
             // The control. Both diagonals fit these clues, so there are two answers.
             // Without this case, an encoding that was accidentally too strict would
             // answer "unsat" to every uniqueness query and look like success.
-            label: "ambiguous 2x2, two answers",
+            label: "ambiguous 2x2, two answers".to_string(),
             puzzle: Nonogram::new(Clues {
                 dims: Dims::new(2, 2),
                 rows: vec![vec![1], vec![1]],
@@ -189,35 +195,99 @@ fn fixtures() -> Vec<Fixture> {
         },
         Fixture {
             // Rows claim three filled cells, columns claim none.
-            label: "contradictory clues, no answer",
+            label: "contradictory clues, no answer".to_string(),
             puzzle: Nonogram::new(Clues {
                 dims: Dims::new(3, 1),
                 rows: vec![vec![3]],
                 columns: vec![vec![], vec![], vec![]],
             }),
         },
-    ]
+    ];
+
+    written.extend(generated());
+    written
+}
+
+/// Fixtures the generator produced, rather than ones a person wrote down.
+///
+/// Why this matters more than it looks: the generator decides what to keep using our
+/// own line solver. Without these fixtures the generator and the filter that judges
+/// it are a single unchecked pair, and a shared mistake between them would be
+/// invisible — the generator would hand out puzzles it believed were unique and
+/// nothing would ever disagree.
+///
+/// Both directions are covered, because only testing what the filter accepted would
+/// leave the rejections unexamined:
+///
+/// * puzzles the filter **kept**, where a real solver must answer sat then unsat;
+/// * puzzles the filter **threw out as ambiguous**, where it must answer sat then
+///   sat. A filter that rejected good puzzles would still look perfect if only its
+///   acceptances were checked.
+///
+/// Seeds and board size are fixed, so this set is the same on every run and in CI.
+fn generated() -> Vec<Fixture> {
+    let shape = Shape::blobby(Dims::new(6, 6));
+    let budget = Budget::default();
+    let mut out = Vec::new();
+
+    let (kept, _) = batch(0..60, shape, budget);
+    for candidate in kept.into_iter().take(6) {
+        out.push(Fixture {
+            label: format!("generated, kept: seed {}", candidate.seed),
+            puzzle: candidate.puzzle,
+        });
+    }
+
+    // The filter's rejections. `propose` reports why it said no but does not hand
+    // back the puzzle, so the board is rebuilt from the same seed — which is the
+    // reproducibility promise being used rather than merely asserted.
+    let mut ambiguous = 0;
+    for seed in 0..60u64 {
+        if ambiguous == 2 {
+            break;
+        }
+        if propose(seed, shape, budget) == Err(Rejected::Ambiguous) {
+            out.push(Fixture {
+                label: format!("generated, rejected as ambiguous: seed {seed}"),
+                puzzle: Nonogram::new(Clues::of(&pattern(seed, shape))),
+            });
+            ambiguous += 1;
+        }
+    }
+    assert_eq!(
+        ambiguous, 2,
+        "no ambiguous seeds in the first 60, so the rejection path is untested here"
+    );
+
+    out
 }
 
 #[test]
 fn a_real_solver_agrees_with_our_line_solver() {
+    // Built before a solver is looked for, on purpose. Assembling the fixtures runs
+    // the generator and the filter, so a broken fixture set fails on a contributor's
+    // laptop rather than waiting for CI. Only the comparison needs a solver.
+    let fixtures = fixtures();
+    println!("{} fixtures, hand-written and generated", fixtures.len());
+
     let solvers = match solvers() {
         Ok(s) => s,
         Err(why) => {
             // Loud on purpose. Run with `-- --nocapture` to see it.
             println!(
                 "\n*** SOLVER AGREEMENT NOT VERIFIED: {why}.\n\
-                 *** Nothing in this test ran. CI sets GATEDSPARK_REQUIRE_SOLVER=1,\n\
-                 *** under which this is a failure rather than this message.\n"
+                 *** The fixtures were built, but no solver verdict was obtained, so\n\
+                 *** the claim this test exists for is unchecked. CI sets\n\
+                 *** GATEDSPARK_REQUIRE_SOLVER=1, under which this is a failure\n\
+                 *** rather than this message.\n"
             );
             return;
         }
     };
     println!("verifying against {} solver(s)", solvers.len());
-
-    for fixture in fixtures() {
+    for fixture in fixtures {
         let ours = solve(&fixture.puzzle, Budget::default()).solved;
-        let label = fixture.label;
+        let label = &fixture.label;
 
         // What our line solver concluded, expressed as the two answers a real solver
         // must give. `Undecided` would mean our own search gave up, which none of
@@ -254,6 +324,100 @@ fn a_real_solver_agrees_with_our_line_solver() {
             }
         } else {
             assert_eq!(ours, Solved::None, "{label}: no witness but not unsolvable");
+        }
+    }
+}
+
+/// Bridges this file's test runner to the pipeline's `Verifier` trait.
+///
+/// The `Answer` to `Outcome` mapping is the whole point: a solver that could not be
+/// run, or whose output could not be parsed, becomes `Unknown` and never `Unsat`. The
+/// opposite mistake would turn a broken solver into a proof of uniqueness.
+struct SolverAsVerifier<'a>(&'a Solver);
+
+impl gs_nonogram::publish::Verifier for SolverAsVerifier<'_> {
+    fn name(&self) -> &'static str {
+        "solver under test"
+    }
+    fn ask(&self, query: &str) -> Outcome {
+        match self.0.ask(query, "pipeline") {
+            Answer::Sat => Outcome::Sat,
+            Answer::Unsat => Outcome::Unsat,
+            Answer::Unknown => Outcome::Unknown,
+        }
+    }
+}
+
+/// The whole slice, end to end, against a real solver.
+///
+/// The worker generates puzzles for every difficulty level, the pipeline asks a real
+/// solver about each one, and the report records what it said. This is the claim the
+/// project exists to make, and until this test ran, every part of it had been checked
+/// separately and none of it together.
+///
+/// Two assertions carry the weight:
+///
+/// * the solver agrees with the filter on every puzzle the worker delivered;
+/// * the **only** thing stopping each report from being publishable is the missing
+///   content id, which is the honest current state of the world (ADR 0004). When a
+///   digest exists, this is what says the rest was already complete.
+#[test]
+fn the_whole_pipeline_produces_reports_a_real_solver_agrees_with() {
+    let solvers = match solvers() {
+        Ok(s) => s,
+        Err(why) => {
+            println!(
+                "\n*** PIPELINE NOT VERIFIED AGAINST A SOLVER: {why}.\n\
+                 *** CI sets GATEDSPARK_REQUIRE_SOLVER=1, under which this fails.\n"
+            );
+            return;
+        }
+    };
+
+    let quotas: Vec<Quota> = BANDS.iter().map(|band| Quota { band, wanted: 2 }).collect();
+    let produced = run(
+        9_000,
+        &quotas,
+        Limits {
+            max_seeds_per_band: 2_000,
+            budget: Budget::default(),
+        },
+    );
+    assert!(
+        produced.complete(),
+        "the worker could not fill its quotas: {:?}",
+        produced.shortfalls()
+    );
+    println!(
+        "pipeline: {} puzzles through {} solver(s)",
+        produced.candidates.len(),
+        solvers.len()
+    );
+
+    for candidate in &produced.candidates {
+        for solver in &solvers {
+            let verifier = SolverAsVerifier(solver);
+            let report = report_for(candidate, &verifier, Budget::default())
+                .expect("a candidate is always askable");
+
+            assert!(
+                filter_and_solver_agree(candidate, &report),
+                "{}: seed {} - our filter and the solver disagree. Report: {report:?}",
+                solver.name,
+                candidate.seed
+            );
+            assert_eq!(
+                report.publishable(),
+                Err(NotPublishable::NoContentId),
+                "{}: seed {} is blocked by something other than the missing digest",
+                solver.name,
+                candidate.seed
+            );
+            assert!(!report.has_undecided_query());
+            assert!(
+                report.band.is_some(),
+                "a puzzle the worker produced for a level has no level"
+            );
         }
     }
 }

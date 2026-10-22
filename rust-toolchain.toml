@@ -1,5 +1,13 @@
 # Pinned so that "reproducible releases" (architecture plan, design principles) is
 # a property of the repo and not of whatever is installed on a developer's machine.
+#
+# The channel deliberately carries no host triple. rustup fills the host in from the
+# machine, which is what lets one pin serve the Linux CI jobs, the Apple and Android
+# targets of ADR 0001, and Windows. Do not "fix" this by writing
+# "1.97.0-x86_64-pc-windows-gnu" here: that pins a Windows host for every machine and
+# breaks the Linux jobs. Windows selects the gnu host per machine instead, with
+# scripts/setup-windows.ps1; see docs/adr/0005-windows-gnu-toolchain.md.
 [toolchain]
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
+

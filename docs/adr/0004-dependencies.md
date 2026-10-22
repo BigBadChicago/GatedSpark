@@ -32,3 +32,11 @@ finished.
 broader network access level. The second host matters because `rust-toolchain.toml` pins the
 toolchain, and `rustup` needs that host to honour the pin; local work here uses
 `RUSTUP_TOOLCHAIN=stable` as a workaround, which CI does not need.
+
+**Amendment, 2026-10-22: the block is per environment, not a property of the project.** Both hosts
+are reachable from the project's own Windows machine — `cargo search z3` works there, and the gnu
+toolchain was installed from `static.rust-lang.org` on it the same day. What this ADR describes is
+the cloud container's network policy. So the zero-dependency rule above is a constraint being
+honoured, not a law of the project: the moment the container's allowed domains are widened, adding
+a dependency becomes an ordinary decision again rather than an impossible one. Nothing here changes
+until then, because a dependency that only some machines can fetch is worse than none.
