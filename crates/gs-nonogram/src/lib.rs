@@ -25,6 +25,7 @@
 //! platform is arranged to avoid. WFC gets the same treatment in M3.
 
 pub mod clues;
+pub mod difficulty;
 pub mod generate;
 pub mod line;
 pub mod rng;

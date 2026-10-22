@@ -84,6 +84,30 @@ for contributors and would be a vacuous pass in CI — hence the environment var
 | The generator cannot become the verifier | structural: `generate` returns a `Candidate`, and neither it nor `Features` has any conversion to `verification::Outcome` |
 | A yield is measured, never asserted from a stored number | `generation::the_yield_is_measured_and_printed` prints the counts and asserts only that they add up and that the generator produces something |
 
+### Nonogram's difficulty levels (added 2026-10-22)
+
+The levels are the game's to define, not the platform's, so they live in
+`gs-nonogram::difficulty` and `gs-core` still has no notion of a band.
+
+| Claim | Enforcing test |
+|---|---|
+| Every level can actually be produced, by generating at its own declared shape | `difficulty::every_band_is_reachable_by_generating_at_its_own_shape` |
+| The level list is not empty, so the tests above are not iterating nothing | `difficulty::there_is_at_least_one_band` |
+| No puzzle is claimed by two levels, so `band_of` does not depend on list order | `difficulty::no_two_bands_claim_the_same_puzzle` |
+| The list is ordered easier to harder, which is the order a menu would show | `difficulty::bands_are_ordered_from_easier_to_harder` |
+| A puzzle needing a guess is in no level at all | `difficulty::a_puzzle_needing_a_guess_is_in_no_band` |
+| A puzzle outside every window is ungraded rather than squeezed into the nearest level | `difficulty::a_puzzle_outside_every_window_is_ungraded_rather_than_squeezed_in` |
+| A level is a board size *and* a window; features alone cannot claim one | `difficulty::a_puzzle_of_the_wrong_size_is_not_claimed` |
+| Asking for one level never returns a puzzle from another | `difficulty::asking_for_one_band_never_returns_another` |
+| Each level's shape has a workable yield, so no level is reachable in theory and empty in practice | `difficulty::every_bands_shape_is_one_the_generator_accepts` |
+| Each level generates from its own shape rather than competing with another's | `difficulty::the_shapes_are_distinct_so_each_band_has_its_own_production` |
+
+Explicitly **not** enforced, and the honest limit of all of the above: that a player
+would agree with the ordering. No play data exists. The tests prove the levels are
+reachable, distinct and ordered by measured solver work; they cannot prove the
+mapping to the words a player reads is right, and that stays an informed guess until
+there are players. The thresholds are provisional and the module says so.
+
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
 | Claim | Enforcing test |
