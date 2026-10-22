@@ -26,6 +26,7 @@
 
 pub mod clues;
 pub mod line;
+pub mod rng;
 pub mod rules;
 pub mod smtlib;
 pub mod solve;
