@@ -1,6 +1,6 @@
 # ADR 0002 — Z3 behind a replaceable `Verifier` interface, with a second solver in CI
 
-- **Status:** proposed; the cross-check is on a decision card in the project thread (2026-10-22)
+- **Status:** accepted; the user chose Z3 plus the CVC5 cross-check on 2026-10-22
 - **Date:** 2026-10-22
 
 ## Context
@@ -22,8 +22,9 @@ published as unique — and under the identical-daily-board decision, every play
 2. **The engine talks to it through a `Verifier` trait over SMT-LIB2 text.** The solver stays
    replaceable, which the architecture requires of every vendor dependency.
 3. **CVC5 (BSD-3-Clause) re-checks UNSAT and uniqueness results in CI** over the regression corpus.
-   Because the interface is SMT-LIB2, this is CI plumbing rather than a second encoder. Pending the
-   user's decision.
+   Because the interface is SMT-LIB2, this is CI plumbing rather than a second encoder. Chosen by the
+   user on 2026-10-22 over running Z3 alone, so a disagreement between two solvers is a build
+   failure rather than something nobody would ever notice.
 
 ## Consequences
 
