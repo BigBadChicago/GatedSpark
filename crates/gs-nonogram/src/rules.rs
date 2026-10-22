@@ -35,6 +35,11 @@ pub enum Action {
     Set { index: u32, value: Cell },
 }
 
+/// Derives `Clone` and `Eq` so a generated puzzle can be carried around and
+/// compared. Comparing two `Nonogram`s compares their clues and ruleset version,
+/// which is the right notion of sameness here: a puzzle *is* its clues, and nothing
+/// in it remembers an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nonogram {
     pub clues: Clues,
     pub version: u32,

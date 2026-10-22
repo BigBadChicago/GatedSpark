@@ -36,6 +36,7 @@ use std::process::Command;
 
 use gs_core::state::Dims;
 use gs_nonogram::clues::{Clues, Pattern};
+use gs_nonogram::generate::{batch, pattern, propose, Rejected, Shape};
 use gs_nonogram::rules::Nonogram;
 use gs_nonogram::smtlib::{solvability_query, uniqueness_query};
 use gs_nonogram::solve::{solve, Budget, Solved};
@@ -158,7 +159,7 @@ fn runnable(program: &str) -> bool {
 
 /// A fixture, and what our own line solver concluded about it.
 struct Fixture {
-    label: &'static str,
+    label: String,
     puzzle: Nonogram,
 }
 
@@ -167,20 +168,20 @@ fn fixtures() -> Vec<Fixture> {
         Pattern::from_rows(&["..#..", "..#..", "#####", "..#..", "..#.."]).expect("rectangular");
     let picture = Pattern::from_rows(&["##.", ".#.", ".##"]).expect("rectangular");
 
-    vec![
+    let mut written = vec![
         Fixture {
-            label: "cross 5x5, uniquely solvable",
+            label: "cross 5x5, uniquely solvable".to_string(),
             puzzle: Nonogram::new(Clues::of(&cross)),
         },
         Fixture {
-            label: "small picture 3x3",
+            label: "small picture 3x3".to_string(),
             puzzle: Nonogram::new(Clues::of(&picture)),
         },
         Fixture {
             // The control. Both diagonals fit these clues, so there are two answers.
             // Without this case, an encoding that was accidentally too strict would
             // answer "unsat" to every uniqueness query and look like success.
-            label: "ambiguous 2x2, two answers",
+            label: "ambiguous 2x2, two answers".to_string(),
             puzzle: Nonogram::new(Clues {
                 dims: Dims::new(2, 2),
                 rows: vec![vec![1], vec![1]],
@@ -189,35 +190,99 @@ fn fixtures() -> Vec<Fixture> {
         },
         Fixture {
             // Rows claim three filled cells, columns claim none.
-            label: "contradictory clues, no answer",
+            label: "contradictory clues, no answer".to_string(),
             puzzle: Nonogram::new(Clues {
                 dims: Dims::new(3, 1),
                 rows: vec![vec![3]],
                 columns: vec![vec![], vec![], vec![]],
             }),
         },
-    ]
+    ];
+
+    written.extend(generated());
+    written
+}
+
+/// Fixtures the generator produced, rather than ones a person wrote down.
+///
+/// Why this matters more than it looks: the generator decides what to keep using our
+/// own line solver. Without these fixtures the generator and the filter that judges
+/// it are a single unchecked pair, and a shared mistake between them would be
+/// invisible — the generator would hand out puzzles it believed were unique and
+/// nothing would ever disagree.
+///
+/// Both directions are covered, because only testing what the filter accepted would
+/// leave the rejections unexamined:
+///
+/// * puzzles the filter **kept**, where a real solver must answer sat then unsat;
+/// * puzzles the filter **threw out as ambiguous**, where it must answer sat then
+///   sat. A filter that rejected good puzzles would still look perfect if only its
+///   acceptances were checked.
+///
+/// Seeds and board size are fixed, so this set is the same on every run and in CI.
+fn generated() -> Vec<Fixture> {
+    let shape = Shape::blobby(Dims::new(6, 6));
+    let budget = Budget::default();
+    let mut out = Vec::new();
+
+    let (kept, _) = batch(0..60, shape, budget);
+    for candidate in kept.into_iter().take(6) {
+        out.push(Fixture {
+            label: format!("generated, kept: seed {}", candidate.seed),
+            puzzle: candidate.puzzle,
+        });
+    }
+
+    // The filter's rejections. `propose` reports why it said no but does not hand
+    // back the puzzle, so the board is rebuilt from the same seed — which is the
+    // reproducibility promise being used rather than merely asserted.
+    let mut ambiguous = 0;
+    for seed in 0..60u64 {
+        if ambiguous == 2 {
+            break;
+        }
+        if propose(seed, shape, budget) == Err(Rejected::Ambiguous) {
+            out.push(Fixture {
+                label: format!("generated, rejected as ambiguous: seed {seed}"),
+                puzzle: Nonogram::new(Clues::of(&pattern(seed, shape))),
+            });
+            ambiguous += 1;
+        }
+    }
+    assert_eq!(
+        ambiguous, 2,
+        "no ambiguous seeds in the first 60, so the rejection path is untested here"
+    );
+
+    out
 }
 
 #[test]
 fn a_real_solver_agrees_with_our_line_solver() {
+    // Built before a solver is looked for, on purpose. Assembling the fixtures runs
+    // the generator and the filter, so a broken fixture set fails on a contributor's
+    // laptop rather than waiting for CI. Only the comparison needs a solver.
+    let fixtures = fixtures();
+    println!("{} fixtures, hand-written and generated", fixtures.len());
+
     let solvers = match solvers() {
         Ok(s) => s,
         Err(why) => {
             // Loud on purpose. Run with `-- --nocapture` to see it.
             println!(
                 "\n*** SOLVER AGREEMENT NOT VERIFIED: {why}.\n\
-                 *** Nothing in this test ran. CI sets GATEDSPARK_REQUIRE_SOLVER=1,\n\
-                 *** under which this is a failure rather than this message.\n"
+                 *** The fixtures were built, but no solver verdict was obtained, so\n\
+                 *** the claim this test exists for is unchecked. CI sets\n\
+                 *** GATEDSPARK_REQUIRE_SOLVER=1, under which this is a failure\n\
+                 *** rather than this message.\n"
             );
             return;
         }
     };
     println!("verifying against {} solver(s)", solvers.len());
-
-    for fixture in fixtures() {
+    for fixture in fixtures {
         let ours = solve(&fixture.puzzle, Budget::default()).solved;
-        let label = fixture.label;
+        let label = &fixture.label;
 
         // What our line solver concluded, expressed as the two answers a real solver
         // must give. `Undecided` would mean our own search gave up, which none of

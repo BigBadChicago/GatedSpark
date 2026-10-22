@@ -70,6 +70,20 @@ The honest qualification: this is enforced **in CI**, not everywhere. On a machi
 no solver the test prints that it verified nothing and returns, which is a convenience
 for contributors and would be a vacuous pass in CI — hence the environment variable.
 
+### Generation (M3, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| A seed rebuilds its board exactly | `generation::a_seed_rebuilds_the_same_pattern`, and `generation_rng::the_stream_from_a_seed_is_pinned` underneath it |
+| A block of seeds rebuilds the same candidates and the same report | `generation::the_same_block_of_seeds_gives_the_same_candidates` |
+| One round of the automaton does not depend on scan order | `generation::smoothing_is_not_order_dependent`; structurally, `smooth` is double-buffered |
+| The clues a candidate carries are satisfied by the answer a solver finds, with no reference to the board they came from | `generation::a_candidates_clues_describe_its_own_board` |
+| Nothing ambiguous or undecided is ever returned as a candidate | `generation::nothing_accepted_is_ambiguous_or_undecided` |
+| No seed is lost between the counts | `Report::is_consistent`, asserted in `generation::nothing_accepted_is_ambiguous_or_undecided` and `the_yield_is_measured_and_printed` |
+| A real solver agrees with the filter on puzzles the generator **kept** and on ones it **threw out as ambiguous** | `solver_agreement::a_real_solver_agrees_with_our_line_solver`, generated fixtures, **in the `solver` CI job only** |
+| The generator cannot become the verifier | structural: `generate` returns a `Candidate`, and neither it nor `Features` has any conversion to `verification::Outcome` |
+| A yield is measured, never asserted from a stored number | `generation::the_yield_is_measured_and_printed` prints the counts and asserts only that they add up and that the generator produces something |
+
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
 | Claim | Enforcing test |
