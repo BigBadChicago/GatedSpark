@@ -32,8 +32,11 @@ The launch puzzle family is **Nonogram**, with **Slitherlink** as family two. Th
 reserves the Tier B global constraints Slitherlink needs, because freezing the DSL around local
 constraints is the one decision here that would be expensive to reverse.
 
-Next is M3, generation: a pattern generator feeding mechanical clue derivation, with the solver
-deciding what is accepted. The generator is never a correctness oracle.
+M3 (generation) and most of M4 (the validation report) now exist: a pattern generator feeds
+mechanical clue derivation, the solver decides what is accepted, and every accepted puzzle carries a
+report of the questions a solver was asked and what it answered. The generator is never a
+correctness oracle. One piece of M4 is deliberately missing: there is no content fingerprint yet, so
+nothing is publishable, and a test asserts that this is the only thing standing in the way.
 
 What exists and is enforced by a test is listed in
 [`docs/adr/0003-engine-game-boundary.md`](docs/adr/0003-engine-game-boundary.md). Nothing in this
@@ -50,6 +53,24 @@ cargo clippy --all-targets # floating-point arithmetic in the core is a build er
 The toolchain is pinned in `rust-toolchain.toml`. In an environment whose network policy blocks
 `static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
 [`docs/adr/0004-dependencies.md`](docs/adr/0004-dependencies.md).
+
+### The solver check is skipped unless a solver is installed
+
+`cargo test --workspace` compares this code against this code. Exactly one test compares it against
+an outside program: `solver_agreement`, which asks a real SMT solver whether it agrees with our line
+solver. With no solver on the PATH — the list of folders your system searches when you type a
+command — that test prints a notice saying it verified nothing and returns. Rust hides whatever a
+*passing* test prints, so what you see is a bare `ok` that checked nothing.
+
+To see the notice, or a real verification:
+
+```sh
+cargo test -p gs-nonogram --test solver_agreement -- --nocapture
+```
+
+A real run prints `verifying against N solver(s)`. If that line is absent, the check did not happen.
+CI does not depend on remembering any of this: the `solver` job installs Z3 and sets
+`GATEDSPARK_REQUIRE_SOLVER=1`, under which a missing solver fails the test instead of skipping it.
 
 ### On Windows, run the setup script once
 
