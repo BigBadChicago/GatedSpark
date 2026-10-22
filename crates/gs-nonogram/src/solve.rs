@@ -42,8 +42,15 @@ pub enum Solved {
 /// The difficulty feature vector, measured while solving.
 ///
 /// Measurements of what the solver actually did, not predictions about a human.
-/// Mapping these to player-facing bands needs play data and is deliberately absent:
-/// a tunable calibrated against output the system cannot reach fails silently.
+///
+/// Turning these into player-facing difficulty levels is **the game's job, not the
+/// platform's** (decided 2026-10-22). How many levels there are and where the
+/// boundaries fall differ per game, so the platform measures and carries the numbers
+/// and never defines a band. That is why nothing in `gs-core` mentions a band, and
+/// why this struct has no `band` field.
+///
+/// The mapping also needs real play data, which does not exist yet: a threshold
+/// calibrated against output the system cannot reach fails silently as a shuffle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Features {
     /// Cells decided by line propagation alone, before any guess.
