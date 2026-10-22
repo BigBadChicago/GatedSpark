@@ -140,6 +140,21 @@ there are players. The thresholds are provisional and the module says so.
 | The report does not re-decide publication | structural: `publishable` calls `verification::decide`, so the report and the gate are one judgement |
 | The report reads no clock | structural: there is no timestamp field, so a stored record cannot depend on the reader's clock |
 
+### The whole pipeline, end to end (M4, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| The worker's output, asked about by a real solver, agrees with our filter on every puzzle | `solver_agreement::the_whole_pipeline_produces_reports_a_real_solver_agrees_with`, **in the `solver` CI job only** |
+| The only thing stopping a good report from being publishable is the missing content id | same test, and `publishing::the_only_thing_standing_between_a_good_report_and_publication_is_the_missing_digest` |
+| A solver that could not be run becomes `UNKNOWN`, never `UNSAT` | the `Answer`-to-`Outcome` mapping in `SolverAsVerifier`; a broken solver must not become a proof |
+| A solver timeout is recorded and refused, not retried or reinterpreted | `publishing::a_solver_timeout_is_recorded_and_refused_not_retried` |
+| A solver disagreeing with our filter is recorded as disagreeing, with the solver's answer kept | `publishing::a_solver_that_disagrees_with_the_filter_is_recorded_as_disagreeing` |
+| Nobody knowing is not counted as agreement | `publishing::an_undecided_solver_answer_is_not_agreement` |
+| Solvability is asked before uniqueness, since uniqueness needs the witness | `publishing::the_uniqueness_query_is_the_second_one_asked` |
+| The witness is replayed through the engine's own goal test, not re-checked locally | `publishing::the_witness_is_replayed_through_the_engine`; `replay_of` calls `Ruleset::is_solved` |
+| Two reports for the same candidate are identical, so a re-verification can diff them | `publishing::two_reports_for_the_same_candidate_are_identical` |
+| This crate cannot answer its own solver questions | structural: `Verifier` is a trait with no implementation in the crate, so an `Outcome` can only arrive from outside |
+
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
 | Claim | Enforcing test |

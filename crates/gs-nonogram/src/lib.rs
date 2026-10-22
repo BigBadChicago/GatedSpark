@@ -28,6 +28,7 @@ pub mod clues;
 pub mod difficulty;
 pub mod generate;
 pub mod line;
+pub mod publish;
 pub mod rng;
 pub mod rules;
 pub mod smtlib;

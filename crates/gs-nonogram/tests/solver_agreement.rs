@@ -34,12 +34,17 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
+use gs_core::report::NotPublishable;
 use gs_core::state::Dims;
+use gs_core::verification::Outcome;
 use gs_nonogram::clues::{Clues, Pattern};
+use gs_nonogram::difficulty::BANDS;
 use gs_nonogram::generate::{batch, pattern, propose, Rejected, Shape};
+use gs_nonogram::publish::{filter_and_solver_agree, report_for};
 use gs_nonogram::rules::Nonogram;
 use gs_nonogram::smtlib::{solvability_query, uniqueness_query};
 use gs_nonogram::solve::{solve, Budget, Solved};
+use gs_nonogram::worker::{run, Limits, Quota};
 
 /// What a solver said. Mirrors `gs_core::verification::Outcome`, kept separate here
 /// because this runner is test scaffolding and must not become the engine's verifier.
@@ -319,6 +324,100 @@ fn a_real_solver_agrees_with_our_line_solver() {
             }
         } else {
             assert_eq!(ours, Solved::None, "{label}: no witness but not unsolvable");
+        }
+    }
+}
+
+/// Bridges this file's test runner to the pipeline's `Verifier` trait.
+///
+/// The `Answer` to `Outcome` mapping is the whole point: a solver that could not be
+/// run, or whose output could not be parsed, becomes `Unknown` and never `Unsat`. The
+/// opposite mistake would turn a broken solver into a proof of uniqueness.
+struct SolverAsVerifier<'a>(&'a Solver);
+
+impl gs_nonogram::publish::Verifier for SolverAsVerifier<'_> {
+    fn name(&self) -> &'static str {
+        "solver under test"
+    }
+    fn ask(&self, query: &str) -> Outcome {
+        match self.0.ask(query, "pipeline") {
+            Answer::Sat => Outcome::Sat,
+            Answer::Unsat => Outcome::Unsat,
+            Answer::Unknown => Outcome::Unknown,
+        }
+    }
+}
+
+/// The whole slice, end to end, against a real solver.
+///
+/// The worker generates puzzles for every difficulty level, the pipeline asks a real
+/// solver about each one, and the report records what it said. This is the claim the
+/// project exists to make, and until this test ran, every part of it had been checked
+/// separately and none of it together.
+///
+/// Two assertions carry the weight:
+///
+/// * the solver agrees with the filter on every puzzle the worker delivered;
+/// * the **only** thing stopping each report from being publishable is the missing
+///   content id, which is the honest current state of the world (ADR 0004). When a
+///   digest exists, this is what says the rest was already complete.
+#[test]
+fn the_whole_pipeline_produces_reports_a_real_solver_agrees_with() {
+    let solvers = match solvers() {
+        Ok(s) => s,
+        Err(why) => {
+            println!(
+                "\n*** PIPELINE NOT VERIFIED AGAINST A SOLVER: {why}.\n\
+                 *** CI sets GATEDSPARK_REQUIRE_SOLVER=1, under which this fails.\n"
+            );
+            return;
+        }
+    };
+
+    let quotas: Vec<Quota> = BANDS.iter().map(|band| Quota { band, wanted: 2 }).collect();
+    let produced = run(
+        9_000,
+        &quotas,
+        Limits {
+            max_seeds_per_band: 2_000,
+            budget: Budget::default(),
+        },
+    );
+    assert!(
+        produced.complete(),
+        "the worker could not fill its quotas: {:?}",
+        produced.shortfalls()
+    );
+    println!(
+        "pipeline: {} puzzles through {} solver(s)",
+        produced.candidates.len(),
+        solvers.len()
+    );
+
+    for candidate in &produced.candidates {
+        for solver in &solvers {
+            let verifier = SolverAsVerifier(solver);
+            let report = report_for(candidate, &verifier, Budget::default())
+                .expect("a candidate is always askable");
+
+            assert!(
+                filter_and_solver_agree(candidate, &report),
+                "{}: seed {} - our filter and the solver disagree. Report: {report:?}",
+                solver.name,
+                candidate.seed
+            );
+            assert_eq!(
+                report.publishable(),
+                Err(NotPublishable::NoContentId),
+                "{}: seed {} is blocked by something other than the missing digest",
+                solver.name,
+                candidate.seed
+            );
+            assert!(!report.has_undecided_query());
+            assert!(
+                report.band.is_some(),
+                "a puzzle the worker produced for a level has no level"
+            );
         }
     }
 }
