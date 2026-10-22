@@ -29,6 +29,7 @@
 
 use crate::content::ContentId;
 use crate::hash::StateHash;
+use crate::package::Sealed;
 use crate::ruleset::RulesetId;
 use crate::verification::{decide, Query, Refusal};
 
@@ -75,8 +76,9 @@ pub enum NotPublishable {
     Verification(Refusal),
     /// The witness was never replayed through the engine, or the engine refused it.
     WitnessNotReproduced,
-    /// No content id, so there is nothing to bind a signature to. Expected while the
-    /// digest has no implementation; see ADR 0004.
+    /// No content id, so there is nothing to bind a signature to. This is the normal
+    /// state of a report that has not been sealed yet, rather than a fault: see
+    /// [`ValidationReport::bind_to`].
     NoContentId,
 }
 
@@ -132,6 +134,25 @@ impl ValidationReport {
     #[must_use]
     pub fn has_undecided_query(&self) -> bool {
         self.queries.iter().any(|q| !q.returned.is_decisive())
+    }
+
+    /// Record which package this report is the evidence for.
+    ///
+    /// Takes the whole [`Sealed`] rather than a bare [`ContentId`] on purpose. The id
+    /// a report carries has to be the id of the package that was actually written from
+    /// it, and the only thing that knows that is [`crate::package::seal`]. Asking for
+    /// the sealed package means the caller cannot supply an id it worked out some other
+    /// way, which would be two derivations of one value — the failure
+    /// [`crate::content`] exists to prevent.
+    ///
+    /// The ordering this implies is worth stating: a report is sealed *before* it is
+    /// complete, because the package's fingerprint cannot exist until the package does.
+    /// So [`Self::publishable`] returning [`NotPublishable::NoContentId`] is the normal
+    /// state of a freshly built report, and the only state from which sealing is the
+    /// right next step. A caller that wants to know "is this worth sealing" asks
+    /// `publishable` and treats `NoContentId` — and nothing else — as yes.
+    pub fn bind_to(&mut self, sealed: &Sealed) {
+        self.content_id = Some(sealed.content_id);
     }
 
     /// Look up one measurement by name. Returns `None` rather than zero when the

@@ -14,10 +14,11 @@ use gs_core::verification::{Outcome, Query, Refusal};
 
 /// A stand-in digest, for tests only.
 ///
-/// Deliberately not a hash: it copies the first bytes it is given. Using it anywhere
-/// real would be a security hole, which is exactly why it lives in a test file and
-/// why `content::Digest` still has no production implementation (ADR 0004). It is
-/// here so the report's *structure* can be tested without waiting on that decision.
+/// Deliberately not a hash: it copies the first bytes it is given. The real one is
+/// SHA-256, in `gs-crypto` (ADR 0006), and it is deliberately out of reach from here —
+/// see the note on `gs_core::package` for why this crate must not be able to produce a
+/// real fingerprint or a real signature. These tests are about what a report will and
+/// will not claim, which does not depend on the strength of the digest at all.
 struct NotAHash;
 
 impl Digest for NotAHash {
@@ -161,8 +162,10 @@ fn a_witness_never_replayed_is_not_publishable_either() {
 
 #[test]
 fn a_report_with_no_content_id_is_not_publishable() {
-    // The current honest state of the world: no digest implementation, so no content
-    // id, so nothing can be published. That is the right failure, not a stub id.
+    // A report is built before the package it describes exists, so this is the normal
+    // state of a fresh report rather than a fault: no package yet, so no fingerprint of
+    // one, so nothing to publish. `gs_nonogram::publish::publish` treats exactly this
+    // refusal, and no other, as the go-ahead to seal.
     let mut report = good_report();
     report.content_id = None;
     assert_eq!(report.publishable(), Err(NotPublishable::NoContentId));

@@ -37,12 +37,20 @@ the solver decides what is accepted, every accepted puzzle carries a report of t
 solver was asked and what it answered, and that report packs into a file a device can open and play
 from. The generator is never a correctness oracle.
 
-Two pieces of M4 are deliberately missing, and both are the same gap. There is no content
-fingerprint and no signature, because neither should be hand-written and the environment this was
-built in could not reach the package registry. So a package can be written and read back, and
-every refusal around it is tested, but it is not yet tamper-proof: the strength arrives with the
-reviewed implementations, not with more of our own code. A test asserts that the missing
-fingerprint is the only thing standing between a good report and publication.
+M4 is now complete. The two pieces that were missing — the content fingerprint and the signature —
+are real: SHA-256 for the fingerprint and Ed25519 for the signature, both from reviewed libraries,
+both in `gs-crypto`, which is the only crate in the workspace that contains any cryptography. The
+core still has no dependencies and still cannot sign anything, which is what keeps its own tests
+from checking a signature against a signer they could have produced. The reasoning, and what was
+weighed against what, is in
+[`docs/adr/0006-content-id-and-signature.md`](docs/adr/0006-content-id-and-signature.md).
+
+Because the fingerprint is real, the tests around the package are claims rather than wiring checks.
+Every single bit of a published file is flipped, one at a time, and the file must be refused each
+time. A genuinely signed file from a key the reader was not told to trust is refused. And
+`gs_nonogram::publish::publish` closes the loop the slice exists to demonstrate: generate, ask a
+solver, write the evidence, seal a file only if the evidence says yes, and bind the report to the
+file that was actually written.
 
 What exists and is enforced by a test is listed in
 [`docs/adr/0003-engine-game-boundary.md`](docs/adr/0003-engine-game-boundary.md). Nothing in this
@@ -56,8 +64,9 @@ cargo test --workspace     # everything
 cargo clippy --all-targets # floating-point arithmetic in the core is a build error
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`. In an environment whose network policy blocks
-`static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
+The toolchain is pinned in `rust-toolchain.toml`. Building needs the package registry
+(`index.crates.io`) for the three crates `gs-crypto` depends on. In an environment whose network
+policy blocks `static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
 [`docs/adr/0004-dependencies.md`](docs/adr/0004-dependencies.md).
 
 ### The solver check is skipped unless a solver is installed
