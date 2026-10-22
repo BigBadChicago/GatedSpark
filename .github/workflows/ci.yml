@@ -41,3 +41,25 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features
       - run: cargo test --workspace --all-targets
+
+  # The one job that checks our solver text against a real solver. Everything else
+  # in this repository compares our work to our own work, so without this job the
+  # `encoding` tests could pass over text no solver would accept.
+  #
+  # GATEDSPARK_REQUIRE_SOLVER=1 is the point of the job: under it, a missing solver
+  # fails the test instead of skipping it. A test that skips when its dependency is
+  # absent reports green while checking nothing, which is the failure this repository
+  # is built to prevent.
+  solver:
+    name: solver agrees with us
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Z3
+        run: sudo apt-get update && sudo apt-get install -y z3
+      - name: Show solver version
+        run: z3 --version
+      - name: Solver agreement
+        env:
+          GATEDSPARK_REQUIRE_SOLVER: "1"
+        run: cargo test -p gs-nonogram --test solver_agreement -- --nocapture
