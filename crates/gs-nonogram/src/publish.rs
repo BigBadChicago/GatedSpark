@@ -24,6 +24,7 @@
 //! a useful record, not an error, so the refusal appears inside the report rather
 //! than replacing it.
 
+use gs_core::package::Manifest;
 use gs_core::report::{Measurement, Replay, ValidationReport};
 use gs_core::ruleset::Ruleset;
 use gs_core::state::State;
@@ -186,4 +187,22 @@ pub fn filter_and_solver_agree(candidate: &Candidate, report: &ValidationReport)
         // treated as agreement: an exhausted budget is not an answer.
         Solved::Undecided => false,
     }
+}
+
+/// Turn a candidate and its report into the body of a publishable package.
+///
+/// The payload is [`Clues::canonical_bytes`] and nothing else. In particular the
+/// *pattern* the generator started from is not carried: the pipeline throws it away
+/// deliberately (see [`crate::generate`]), and a package that shipped the intended
+/// picture alongside the clues would be shipping the answer.
+///
+/// The witness is not carried either. It lives in the validation report, which stays
+/// on the server, because a package is what a player receives.
+///
+/// This function does not seal anything. Sealing needs a digest and a signing key,
+/// neither of which this crate has or should have; see
+/// [`gs_core::package::seal`].
+#[must_use]
+pub fn manifest_for(candidate: &Candidate, report: &ValidationReport) -> Manifest {
+    Manifest::from_report(report, candidate.puzzle.clues.canonical_bytes())
 }

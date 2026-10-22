@@ -163,9 +163,52 @@ there are players. The thresholds are provisional and the module says so.
 | The whole workspace compiles and its tests pass on that host | same job, `cargo test --workspace --all-targets` |
 | The pinned version is written down once, not twice | `scripts/setup-windows.ps1` and the CI job both read `channel` out of `rust-toolchain.toml`; neither names a version |
 
+### The package: the bytes that leave the building (M4)
+
+| Claim | Enforcing test |
+|---|---|
+| Nothing in a package is decoded before its bytes have been vouched for | `package::a_body_that_fails_its_digest_is_never_decoded` and `package::a_rejected_signature_is_never_decoded`, both of which give `open` a body that is malformed *and* unvouched-for and require the refusal to name the check, not the body |
+| A changed byte anywhere in the body is refused | `package::a_flipped_bit_anywhere_in_the_body_is_refused`, which flips every byte in turn |
+| A changed byte in the stated fingerprint is refused | `package::a_flipped_bit_in_the_stated_content_id_is_refused` |
+| A body cannot be swapped under someone else's signature | `package::a_body_cannot_be_swapped_under_a_signature` |
+| A signature from a key the verifier does not trust is refused | `package::a_key_the_verifier_does_not_trust_is_refused` |
+| Extra bytes after the end are refused, not ignored | `package::trailing_bytes_are_refused` |
+| Every truncation is refused and none panics | `package::every_truncation_is_refused_and_none_panics`, over every prefix |
+| A container version this reader does not know is refused, not guessed at | `package::an_unknown_format_version_is_refused_rather_than_guessed_at` |
+| A byte nobody can read is a broken file, never `UNKNOWN` | `package::a_tag_nobody_can_read_is_a_broken_file_and_not_an_unknown_outcome` |
+| A zero byte is not a valid outcome or replay result | `package::a_zero_byte_is_not_a_valid_outcome_or_replay`; no tag constant is zero, so a zero-filled region cannot decode as `Sat` |
+| `UNKNOWN` survives into the stored file as `UNKNOWN` | `package::unknown_survives_as_unknown` |
+| The encoding has no slack: decode then re-encode is byte-identical | `package::the_encoding_has_no_slack` |
+| Lengths come before contents, so a field split cannot be moved | `package::lengths_come_before_contents_so_a_split_cannot_be_moved` |
+| An absent level is not an empty one | `package::an_absent_band_is_not_an_empty_band` |
+| An over-long field is an error, never a truncation | `package::an_over_long_field_is_an_error_rather_than_a_truncation` |
+| The fingerprint handed back is recomputed, not taken from the file | `package::the_content_id_is_recomputed_from_the_body_rather_than_taken_from_the_file` |
+| "These bytes were checked" cannot be claimed without checking them | `Opened` has a private field, so `open` is the only code that can build one; the `compile_fail` doctest on `Opened` holds this, and the `checks` CI job runs `cargo test --workspace --doc` because `--all-targets` skips doctests |
+| The core cannot sign or verify its own packages | structural: `Signer` and `SignatureVerifier` are traits with no implementation in `gs-core` |
+| A `ContentId` still only ever comes from digesting bytes | structural: `OpenError::ContentIdMismatch` carries the stated value as raw bytes, because a claim found in a file is not something this code digested |
+| A package becomes a playable puzzle again | `packaging::a_sealed_package_becomes_a_playable_puzzle`, which rebuilds the puzzle from the payload, re-solves it, and checks the engine accepts the answer |
+| Clue bytes round-trip, including empty lines and movable splits | `packaging::clue_bytes_round_trip` and `packaging::clue_bytes_round_trip_for_every_difficulty_level` |
+| A payload that is not clues is refused rather than guessed at | `packaging::a_payload_that_is_not_clues_is_refused_rather_than_guessed_at` |
+| A clue set whose line count disagrees with its board is refused | `packaging::a_line_count_that_disagrees_with_the_board_is_refused`; accepting one would let a decoded puzzle reach a state no generated puzzle can |
+| A package does not carry the answer | `packaging::the_package_does_not_carry_the_answer`, which first checks the search finds the clues, so a search that found nothing cannot pass by accident |
+| The evidence the report recorded survives into the file | `packaging::the_package_carries_the_evidence_the_report_recorded` |
+
 Explicitly **not yet enforced**, and labelled as such in the code:
 
 - **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
+  Everything the package tests prove about tampering is therefore about the *wiring* — that the
+  digest is recomputed from the body and compared before anything is decoded — and not about
+  whether the digest is hard to forge. The same goes for signatures: `Signer` and
+  `SignatureVerifier` have no implementation, so a sealed package is currently tamper-*evident*
+  only to the extent the stand-in digest in the tests is, which is not at all.
+- **Re-judging a package that was read back from a file.** `verification::decide` takes queries
+  whose names are `&'static str`, and a name read out of a file is not static, so a
+  `package::Manifest` cannot be handed to the gate. That blocks the first of the four jobs
+  `content-delivery.md` section 6 names for the report: re-verifying the corpus when the rules or
+  the solver change. It is recorded here rather than worked around, because the obvious
+  workaround — a second copy of the gate's logic that reads owned strings — is the one thing
+  worse than the gap. Fixing it properly means changing the signature of the most load-bearing
+  function in the crate, which is a decision and not a chore.
 - **`f64: !IntegerOnly` at runtime.** Rust cannot assert a negative implementation without an extra
   dependency. The trait is sealed, which carries that half structurally, and the clippy lint covers
   arithmetic regardless.
