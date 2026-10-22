@@ -5,9 +5,10 @@
 //! it fails here.
 
 use gs_core::content::{ContentId, Digest};
+use gs_core::dsl::{Constraint, Global, Tier};
 use gs_core::platform_suite::{
-    Ledger, CHECK_CONTENT_ID_IS_BOUND_TO_BYTES, CHECK_EMPTY_GATE_REFUSES,
-    CHECK_EMPTY_REGISTRY_HAS_NO_FAMILIES, CHECK_GATE_IS_A_PURE_FUNCTION,
+    Ledger, CHECK_CONTENT_ID_IS_BOUND_TO_BYTES, CHECK_DSL_RESERVES_A_GLOBAL_TIER,
+    CHECK_EMPTY_GATE_REFUSES, CHECK_EMPTY_REGISTRY_HAS_NO_FAMILIES, CHECK_GATE_IS_A_PURE_FUNCTION,
     CHECK_UNKNOWN_FAMILY_IS_AN_ERROR, CHECK_UNKNOWN_IS_NOT_A_PROOF,
     CHECK_UNKNOWN_IS_NOT_PUBLISHABLE,
 };
@@ -93,6 +94,15 @@ fn platform_holds_with_no_family_installed() {
     assert_eq!(a, ContentId::of(&d, b"puzzle-a"));
     assert_eq!(a.to_hex().len(), 64);
     ledger.record(CHECK_CONTENT_ID_IS_BOUND_TO_BYTES);
+
+    // The DSL can express a Tier B global constraint with no family installed, and
+    // reports it as global rather than as one more local rule. Slitherlink is family
+    // two, and discovering this on family five with the DSL already frozen around
+    // local constraints is the expensive version of this check.
+    let loop_rule = Constraint::Global(Global::SingleClosedLoop { value: 1 });
+    assert_eq!(loop_rule.tier(), Tier::B);
+    assert_eq!(loop_rule.globals().len(), 1);
+    ledger.record(CHECK_DSL_RESERVES_A_GLOBAL_TIER);
 
     ledger.assert_complete();
 }

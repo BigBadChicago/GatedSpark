@@ -16,6 +16,7 @@ pub const CHECK_UNKNOWN_IS_NOT_PUBLISHABLE: &str = "unknown_is_not_publishable";
 pub const CHECK_EMPTY_GATE_REFUSES: &str = "empty_gate_refuses";
 pub const CHECK_GATE_IS_A_PURE_FUNCTION: &str = "gate_is_a_pure_function";
 pub const CHECK_CONTENT_ID_IS_BOUND_TO_BYTES: &str = "content_id_is_bound_to_bytes";
+pub const CHECK_DSL_RESERVES_A_GLOBAL_TIER: &str = "dsl_reserves_a_global_tier";
 
 /// Every check the platform suite must run. The single definition.
 pub const PLATFORM_CHECKS: &[&str] = &[
@@ -26,6 +27,7 @@ pub const PLATFORM_CHECKS: &[&str] = &[
     CHECK_EMPTY_GATE_REFUSES,
     CHECK_GATE_IS_A_PURE_FUNCTION,
     CHECK_CONTENT_ID_IS_BOUND_TO_BYTES,
+    CHECK_DSL_RESERVES_A_GLOBAL_TIER,
 ];
 
 /// Records which checks actually ran.

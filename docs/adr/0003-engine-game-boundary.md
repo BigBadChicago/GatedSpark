@@ -30,15 +30,43 @@ passing for nothing.
 | A gate with nothing asserted against it refuses | same test, `decide(&[])` |
 | The publication decision reads no clock and no configuration | the signature of `verification::decide`, plus the purity check in the same test |
 | Content identity comes from bytes, with one definition | same test, `ContentId::of` |
+| The DSL expresses a Tier B global constraint with no family installed | same test, `Constraint::tier` |
 | The suite cannot pass by running no checks | `a_ledger_that_ran_nothing_fails` |
 | The suite cannot pass by running some checks | `a_ledger_missing_one_check_fails` |
 | A check cannot drift away from its declared name | `an_undeclared_check_name_is_rejected` |
 | One check cannot stand in for the others | `one_check_cannot_stand_in_for_the_others` |
 | Floating-point arithmetic in the core fails the build | `float_arithmetic = "deny"`; verified by planting an `f64` function and observing the failure |
 
-Explicitly **not yet enforced**, and labelled as such in the code: digest strength
-(`content::Digest` has no cryptographic implementation yet — ADR 0004), and the no-float rule over
-state *types* rather than arithmetic, which arrives with the state representation in M1.
+### M1, the deterministic core
+
+| Claim | Enforcing test |
+|---|---|
+| The state hash is identical on x86_64 and aarch64 | `determinism::the_state_hash_is_pinned_across_architectures`, run on both in CI |
+| Nothing hashes a state except through its one canonical encoding | `determinism::the_hash_goes_through_the_canonical_encoding_and_nothing_else` |
+| Board shape is part of a state's identity | `determinism::dimensions_are_part_of_identity` |
+| A replay reproduces every recorded hash | `determinism::a_replay_reproduces_every_recorded_hash` |
+| A record that claims a state its actions do not produce is refused | `determinism::a_replay_whose_hashes_disagree_is_refused` |
+| A record from a different ruleset version is refused, not reinterpreted | `determinism::a_record_from_different_semantics_is_refused_not_reinterpreted` |
+| An action after undo branches and keeps the old future | `timeline_branching::an_action_after_undo_branches_and_keeps_the_old_future` |
+| Redo follows the branch most recently visited | `timeline_branching::redo_follows_the_branch_most_recently_visited` |
+| Jumping to any node agrees with walking there | `timeline_branching::goto_any_node_agrees_with_walking_there` |
+| A move that changes nothing is refused rather than recorded | `timeline_branching::a_move_that_changes_nothing_is_refused` |
+| Undo at the root and redo with no future are errors, not silent no-ops | `timeline_branching::undoing_at_the_root_is_an_error_not_a_silent_no_op`, `redoing_with_no_future_is_an_error` |
+| History that no longer matches the state is refused, not repaired | `Delta::apply` returning `DeltaError::Diverged`; reached by `Timeline::verify_cursor_hash` |
+| A global constraint nested inside a conjunction is not lost | `dsl_tiers::a_global_constraint_nested_in_a_conjunction_is_not_lost` |
+| An empty conjunction is local, not global | `dsl_tiers::an_empty_conjunction_is_local_and_says_so` |
+| A cell's value cannot be a float | `state::assert_integer_only::<CellRepr>()`, a compile-time binding to a sealed trait with no float implementation |
+
+Explicitly **not yet enforced**, and labelled as such in the code:
+
+- **Digest strength.** `content::Digest` has no cryptographic implementation yet; see ADR 0004.
+- **`f64: !IntegerOnly` at runtime.** Rust cannot assert a negative implementation without an extra
+  dependency. The trait is sealed, which carries that half structurally, and the clippy lint covers
+  arithmetic regardless.
+- **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
+  They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
+  walks the tree in the meantime, and is the reference the checkpointed version will be tested
+  against.
 
 ## Consequences
 

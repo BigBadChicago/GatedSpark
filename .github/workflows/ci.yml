@@ -27,6 +27,11 @@ jobs:
         run: cargo test -p gs-core --test platform_with_no_family -- --nocapture
       - name: Anti-vacuity guard
         run: cargo test -p gs-core --test anti_vacuity_guard -- --nocapture
+      # The pinned state hash is the reason this job is a matrix: the deterministic
+      # core has to agree across architectures, and a platform-dependent encoding
+      # shows up here or not at all.
+      - name: Determinism and replay
+        run: cargo test -p gs-core --test determinism -- --nocapture
 
   checks:
     name: fmt, clippy, full test suite
