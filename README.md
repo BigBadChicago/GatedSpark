@@ -15,7 +15,7 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 | `crates/gs-core` | The shared deterministic core: the puzzle DSL, logical state, transition semantics, the branching timeline, replay, and the platform's verification vocabulary. |
 | `crates/gs-nonogram` | The launch puzzle family: clues, rules, the line solver, the difficulty feature vector, and the SMT-LIB2 encoding a real solver reads. |
 | `docs/adr/` | Architecture decision records, including the language, solver and toolchain choices. |
-| `scripts/windows/` | The Windows build wrapper. See *Building on Windows* below. |
+| `scripts/` | One-time setup for Windows machines. See *On Windows, run the setup script once* below. |
 
 The project's foundation documents, the build plan for this slice, and the content-delivery design
 live in the project's shared folder rather than in the repository.
@@ -51,20 +51,23 @@ The toolchain is pinned in `rust-toolchain.toml`. In an environment whose networ
 `static.rust-lang.org`, prefix commands with `RUSTUP_TOOLCHAIN=stable`; see
 [`docs/adr/0004-dependencies.md`](docs/adr/0004-dependencies.md).
 
-### Building on Windows
+### On Windows, run the setup script once
 
-Use the wrapper, from anywhere in the repository:
-
-```bat
-scripts\windows\cargo.cmd test --workspace
-scripts\windows\cargo.cmd clippy --all-targets
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-windows.ps1
 ```
 
-Anything after the script name goes to cargo unchanged. The first run installs a second toolchain
-and takes a few minutes; later runs are ordinary cargo builds.
+After that, the commands above work as written, with no extra flags, and so do plain `cargo` runs
+from an editor. It is safe to run the script more than once.
 
-Plain `cargo` on Windows fails with ``error: linker `link.exe` not found`` unless Visual Studio or
-the Microsoft Build Tools are installed, because the default Windows toolchain has no linker of its
-own. The wrapper uses the GNU toolchain, which brings one. Rustup cannot select a different
-toolchain per operating system, which is why this is a script and not a line of configuration. See
+The one thing to know before running it: it changes this machine's **default** Rust host, so other
+Rust projects on the same machine also start building with the `gnu` toolchain. That is reversible
+with `rustup set default-host x86_64-pc-windows-msvc`.
+
+Why it is needed: a *linker* is the last step of a build, the part that joins the compiled pieces
+into one program you can run. Rust's default Windows setup borrows that linker from Visual Studio,
+so on a machine without Visual Studio the build stops with ``linker `link.exe` not found`` before any
+test runs. The script switches the machine to Rust's `gnu` toolchain, which brings its own linker,
+and installs the version named in `rust-toolchain.toml`. The host is deliberately **not** pinned in
+that file, because pinning it would break Linux and the Apple and Android targets; see
 [`docs/adr/0005-windows-gnu-toolchain.md`](docs/adr/0005-windows-gnu-toolchain.md).

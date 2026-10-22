@@ -1,4 +1,0 @@
-# Windows batch files are checked out with CRLF endings everywhere. cmd.exe is
-# tolerant of LF for simple scripts but not reliably so, and a build wrapper that
-# fails on line endings is a bad way to find that out.
-*.cmd text eol=crlf

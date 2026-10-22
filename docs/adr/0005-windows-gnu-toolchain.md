@@ -1,69 +1,102 @@
-# ADR 0005: Windows builds use the GNU toolchain
+# ADR 0005 — Windows developer builds use the GNU toolchain, not MSVC
 
-Status: accepted. The user chose this on 2026-10-22 over installing Microsoft's
-Build Tools and over documenting the problem without fixing it.
+- **Status:** accepted
+- **Date:** 2026-10-22
 
-## The problem
+## Context
 
-`rust-toolchain.toml` pins `1.97.0`. On Windows that resolves to
-`1.97.0-x86_64-pc-windows-msvc`, and that toolchain has no linker of its own: it
-calls `link.exe`, which arrives with Visual Studio or the standalone Microsoft Build
-Tools. On a Windows machine that has rustup and nothing else, every build stops at:
+Three plain definitions first, because the whole decision turns on them. A **linker** is the last
+step of a build: it joins the compiled pieces into one program you can run. A **toolchain** is the
+bundle of Rust programs that performs a build. Every toolchain has a **host**, meaning the kind of
+machine it runs on, written as a triple such as `x86_64-pc-windows-msvc`.
+
+Rust on Windows comes in two flavours. The default, `msvc`, borrows its linker and the system
+libraries from Visual Studio. The other, `gnu`, brings its own linker and libraries, in a rustup
+component called `rust-mingw`.
+
+On a Windows machine with no Visual Studio, the build stops before a single test runs:
 
 ```
 error: linker `link.exe` not found
+note: the msvc targets depend on the msvc linker but `link.exe` was not found
 ```
 
-This was found on 2026-10-22 on the machine holding the project's working clone. It
-is worth naming precisely: the pin gives a reproducible *compiler* and says nothing
-about the *linker*, which is a separate program the compiler shells out to in order
-to stitch compiled pieces into one executable. "Reproducible releases" was therefore
+This was observed on 2026-10-22 on a Windows 11 machine with no Visual Studio, no Build Tools and
+no `gcc`. Two findings from that machine shaped the decision:
+
+- Adding the gnu **target** to an msvc **host** toolchain does not fix it. The build then asks for
+  `x86_64-w64-mingw32-gcc`, a cross-compiler which is also absent. The linker arrives with the gnu
+  host toolchain, not with the target's standard library — so `targets = [...]` in
+  `rust-toolchain.toml` would not have helped.
+- With the gnu host toolchain the whole suite passes: 47 tests, `cargo fmt --all --check`,
+  `cargo clippy --all-targets --all-features`, and `solver_agreement` against a real Z3 under
+  `GATEDSPARK_REQUIRE_SOLVER=1`.
+
+Worth naming the general lesson: the pin gives a reproducible **compiler** and says nothing about
+the **linker**, which is a separate program the compiler shells out to. "Reproducible releases" was
 a weaker claim than it looked.
 
-## The decision
+`rust-toolchain.toml` pins `channel = "1.97.0"` and names no host. That is deliberate: rustup fills
+the host in from the machine. Writing `channel = "1.97.0-x86_64-pc-windows-gnu"` would pin a
+Windows host for *every* machine, breaking the Linux CI jobs and the Apple and Android targets
+ADR 0001 commits to.
 
-Windows builds use `<pinned channel>-x86_64-pc-windows-gnu`, which bundles its own
-linker, through the wrapper `scripts/windows/cargo.cmd`. The wrapper reads the
-channel out of `rust-toolchain.toml` instead of repeating it, installs the toolchain
-on first use, and passes everything else to cargo unchanged.
+## Decision
 
-`rust-toolchain.toml` is unchanged, because it cannot express this: rustup has no way
-to select a different toolchain per operating system. That is the whole reason a
-wrapper exists rather than a line of configuration.
+Windows developer builds use the `gnu` host toolchain. The repository keeps control of the
+version; the machine supplies the host:
 
-## Why not the alternatives
+```
+rustup set default-host x86_64-pc-windows-gnu
+rustup toolchain install <the channel pinned in rust-toolchain.toml>-x86_64-pc-windows-gnu
+```
 
-**Install the Microsoft Build Tools.** Works, and is what most Rust-on-Windows
-projects do. Rejected because it makes a multi-gigabyte install from another vendor a
-precondition for building this repository, which is a bad trade for a project whose
-Windows-specific code is currently zero.
+`scripts/setup-windows.ps1` does both, reading the version out of `rust-toolchain.toml` so it
+cannot drift from the pin. After it, a plain `cargo test --workspace` works with no extra flags.
 
-**Document it and move on.** Rejected: a known build failure with a known fix does
-not belong in prose only. A contributor meeting `linker link.exe not found` has no
-reason to connect it to a paragraph in a README.
+A per-directory override (`rustup override set`) was rejected for this. It names one exact
+version, so a later bump of the pin would be silently ignored on exactly the machines that ran the
+setup. Changing the default host leaves the pin authoritative.
 
-**Switch the pin to the GNU channel outright.** Rejected: the channel line is shared
-with Linux CI, where the GNU Windows triple means nothing. Per-operating-system
-selection is exactly what rustup does not offer.
+## Consequences
 
-## What this costs
+- The pinned channel stays host-free. `rust-toolchain.toml` now carries a comment saying so, because
+  adding a triple there is the obvious-looking "fix" that would break every non-Windows machine.
+- A new Windows CI job builds and tests on the gnu toolchain, so the path cannot rot unnoticed. It
+  selects the toolchain the same way the documented setup does, rather than naming a version of its
+  own. What this job **cannot** prove is that the build works with no Visual Studio present:
+  GitHub's Windows runners ship it, and we are not going to uninstall it to find out. The narrower
+  claim it defends is worth stating plainly: the gnu toolchain builds this workspace and its tests
+  pass. The job **asserts** the host triple rather than printing it for a human to read, so the
+  check cannot stay green if the switch stops working. The limit is recorded in ADR 0003's
+  not-enforced list as well, so it is visible from the one place that lists what is enforced.
+- `gnu` and `msvc` use different **ABIs** — the rules for how compiled code calls other compiled
+  code. For a workspace that is pure Rust with no third-party crates (ADR 0004), nothing here
+  depends on the difference. It begins to matter if we later link a C library, or ship a Windows
+  binary to players, where `msvc` is the normal choice. **This decision covers developer builds and
+  does not settle what a release build uses.**
+- `rustup set default-host` is a machine-wide setting rather than a per-project one. On a machine
+  with no MSVC linker, that is an honest description of the machine. A developer who later installs
+  Visual Studio can reverse it with `rustup set default-host x86_64-pc-windows-msvc`.
+- Solver agreement on Windows was checked by hand, not by CI. The Linux `solver` job stays the one
+  that gates it.
 
-* Windows builds and Linux builds use different linkers, so a linker-specific problem
-  can appear on one and not the other. Accepted: the CI matrix already builds on
-  Linux x86-64 and Linux arm64, and the `windows` job adds a third combination.
-* The GNU target's C runtime differs from the MSVC one. This matters when linking
-  against C libraries. The workspace has no third-party dependencies at all today
-  (ADR 0004), so it does not matter yet. It will matter when a Z3 binding arrives, and
-  that is the point to revisit this decision rather than now.
-* The first build on a Windows machine downloads a second toolchain.
+## Alternatives
 
-## What is enforced
+**Install Visual Studio Build Tools.** Works, and keeps the default msvc ABI. Rejected as a
+*requirement* for developer builds: it is a multi-gigabyte install for a workspace that needs no C
+compiler at all. It remains the right answer for shipping Windows binaries, which this ADR leaves
+open.
 
-The `windows` job in `.github/workflows/ci.yml` runs the wrapper, checks that the
-toolchain it selects reports a `*-windows-gnu` host, and builds and tests the whole
-workspace with it.
+**Pin the gnu triple in `rust-toolchain.toml`.** One line and no setup step. Rejected: it breaks
+every non-Windows machine, CI included.
 
-The job does **not** prove the build works on a machine with no Visual Studio,
-because GitHub's Windows runners ship with the Build Tools and a job cannot honestly
-remove them. That the GNU target does not call `link.exe` follows from the target
-triple, not from a test here. Recorded as such in ADR 0003.
+**A wrapper script in the repository** that calls `cargo +<pinned channel>-x86_64-pc-windows-gnu`.
+Written first, then dropped in favour of the setting above. It needs no one-time setup and touches
+nothing outside the repository, which is genuinely better in one respect. It loses on two: every
+command has to go through the wrapper, so a plain `cargo build` from an editor or rust-analyzer
+still fails, and it was never run on a Windows machine, while the setting was.
+
+**`RUSTUP_TOOLCHAIN=...-x86_64-pc-windows-gnu` on each command.** The same escape hatch the README
+already documents for blocked networks. Works, but has to be remembered on every command, and
+freezes the version the way a directory override does.

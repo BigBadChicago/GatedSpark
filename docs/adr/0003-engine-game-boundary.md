@@ -74,9 +74,9 @@ for contributors and would be a vacuous pass in CI — hence the environment var
 
 | Claim | Enforcing test |
 |---|---|
-| The toolchain the Windows wrapper picks is the GNU one, which brings its own linker | the `windows` CI job: `scripts\windows\cargo.cmd --version --verbose` must report a `x86_64-pc-windows-gnu` host |
-| The whole workspace compiles and its tests pass under that toolchain | same job, `scripts\windows\cargo.cmd test --workspace --all-targets` |
-| The pinned version is written down once, not twice | the wrapper reads `channel` out of `rust-toolchain.toml` and refuses to run if the line is missing, so a drifted copy cannot exist |
+| A Windows build runs on the gnu host, which brings its own linker | the `windows` CI job asserts `rustc -vV` reports `host: x86_64-pc-windows-gnu`, rather than printing it for a human to read |
+| The whole workspace compiles and its tests pass on that host | same job, `cargo test --workspace --all-targets` |
+| The pinned version is written down once, not twice | `scripts/setup-windows.ps1` and the CI job both read `channel` out of `rust-toolchain.toml`; neither names a version |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
