@@ -134,4 +134,35 @@ impl Clues {
         let columns: u32 = self.columns.iter().flatten().copied().map(u32::from).sum();
         rows == columns
     }
+
+    /// These clues as bytes, one way only.
+    ///
+    /// The same role [`gs_core::state::State::canonical_bytes`] plays for a board: a
+    /// single definition of "this thing as bytes", so that two layers asking whether
+    /// two puzzles are the same cannot answer differently. Two clue sets give equal
+    /// bytes exactly when they are equal.
+    ///
+    /// Little-endian throughout, lengths before contents, so the encoding cannot be
+    /// ambiguous: without the lengths, `rows = [[1,2]]` and `rows = [[1],[2]]` would
+    /// produce the same bytes and two different puzzles would look like one.
+    ///
+    /// Used today to tell duplicates apart while filling a pool. It is also what a
+    /// content id should be taken over in M4, which is the reason it is one function
+    /// here rather than a detail of the worker.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.dims.width.to_le_bytes());
+        out.extend_from_slice(&self.dims.height.to_le_bytes());
+        for lines in [&self.rows, &self.columns] {
+            out.extend_from_slice(&u32::try_from(lines.len()).unwrap_or(u32::MAX).to_le_bytes());
+            for line in lines {
+                out.extend_from_slice(&u32::try_from(line.len()).unwrap_or(u32::MAX).to_le_bytes());
+                for run in line {
+                    out.extend_from_slice(&run.to_le_bytes());
+                }
+            }
+        }
+        out
+    }
 }

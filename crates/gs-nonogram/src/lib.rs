@@ -32,3 +32,4 @@ pub mod rng;
 pub mod rules;
 pub mod smtlib;
 pub mod solve;
+pub mod worker;

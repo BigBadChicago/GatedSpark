@@ -108,6 +108,20 @@ reachable, distinct and ordered by measured solver work; they cannot prove the
 mapping to the words a player reads is right, and that stays an informed guess until
 there are players. The thresholds are provisional and the module says so.
 
+### The batch worker (M3, added 2026-10-22)
+
+| Claim | Enforcing test |
+|---|---|
+| The same request produces the same puzzles in the same order | `worker::the_same_request_produces_the_same_puzzles` |
+| A quota that cannot be filled stops at the seed limit and reports the shortfall | `worker::an_impossible_quota_stops_and_says_so_rather_than_running_forever` |
+| Every puzzle delivered belongs to the level it was asked for | `worker::every_puzzle_produced_is_in_the_level_it_was_asked_for` |
+| Every puzzle delivered still has exactly one answer, checked end to end | `worker::every_puzzle_produced_still_has_exactly_one_answer` |
+| No run contains the same puzzle twice | `worker::no_two_puzzles_in_a_run_are_the_same` |
+| The duplicate check is reached rather than being a counter nothing increments | `worker::the_duplicate_check_is_not_dead_code`, which names the measured colliding seed pair |
+| A recorded seed rebuilds its own puzzle, so a validation report means something | `worker::a_candidate_can_be_rebuilt_from_its_recorded_seed` |
+| Nothing in the worker reads a clock | structural: no time source is imported, and `BandOutcome` records seeds rather than durations |
+| Two clue sets have equal bytes exactly when they are equal | `Clues::canonical_bytes`, with lengths before contents so the encoding cannot be ambiguous |
+
 ### Windows builds (added 2026-10-22, see ADR 0005)
 
 | Claim | Enforcing test |
