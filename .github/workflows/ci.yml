@@ -81,6 +81,36 @@ jobs:
       # unenforced, which is the one thing this repository does not allow.
       - run: cargo test --workspace --doc
 
+  # The browser build, compiled rather than run. `gs-web` is the only crate whose
+  # target is not the machine building it, so nothing else in CI would notice a
+  # change that breaks it — and the failure it guards against is not a build error
+  # at all. `gs-solver` and `gs-store` compile for this target perfectly happily
+  # and then do nothing at run time, which would make a browser that answers
+  # "don't know" to every question and so never finds a puzzle unique. The test
+  # that keeps them out runs in the suite above; this job is what makes sure the
+  # crate they are kept out of still builds for the place it is meant to run.
+  #
+  # What this job does NOT prove: that the translation layer works in a real
+  # browser. That needs a headless browser and is recorded as not enforced in
+  # ADR 0009 rather than implied here.
+  browser:
+    name: the core builds for a browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add the browser target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build the browser crate
+        run: cargo build -p gs-web --target wasm32-unknown-unknown --release
+      # Printed rather than asserted, on purpose: there is no size limit to enforce
+      # yet, and inventing one would be a number nobody chose. The log is where the
+      # next person looks when deciding whether there should be a limit.
+      - name: Report the download size
+        run: |
+          raw=$(stat -c%s target/wasm32-unknown-unknown/release/gs_web.wasm)
+          gz=$(gzip -c target/wasm32-unknown-unknown/release/gs_web.wasm | wc -c)
+          echo "browser module: $((raw / 1024)) KB, $((gz / 1024)) KB compressed"
+
   # The one job that checks our solver text against a real solver. Everything else
   # in this repository compares our work to our own work, so without this job the
   # `encoding` tests could pass over text no solver would accept.

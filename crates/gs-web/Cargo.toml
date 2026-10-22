@@ -1,0 +1,49 @@
+[package]
+name = "gs-web"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# A browser loads a WebAssembly module, which is what `cdylib` produces. `rlib` is
+# here too so the crate's own tests can build on the machine doing the building: the
+# whole design below is that everything worth testing is plain Rust, testable without
+# a browser, and only the thinnest possible layer needs one.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# ---------------------------------------------------------------------------
+# The dependency list is the security boundary. Read ADR 0009 before adding to it.
+# ---------------------------------------------------------------------------
+#
+# `gs-solver` and `gs-store` are absent on purpose, and `tests/boundary.rs` fails if
+# either reappears anywhere in this crate's workspace dependencies. Both of them
+# compile for the browser perfectly happily and then do nothing at run time, which is
+# the failure worth guarding: a browser carrying the solver runner would report "don't
+# know" for every question and quietly become a browser where no puzzle is ever
+# provably unique.
+[dependencies]
+gs-core = { path = "../gs-core" }
+gs-crypto = { path = "../gs-crypto" }
+gs-nonogram = { path = "../gs-nonogram" }
+
+# Not even as dev-dependencies. The tests here build a real signed package with a
+# scripted verifier of their own, exactly as `gs-store`'s tests do, so nothing in this
+# crate needs the solver runner or the on-disk store at any stage.
+
+# ---------------------------------------------------------------------------
+# Only the browser build needs the translation layer
+# ---------------------------------------------------------------------------
+#
+# Rust cannot talk to a web page by itself, and `wasm-bindgen` (MIT OR Apache-2.0) is
+# the only maintained way to do it — every route into a browser either uses it or
+# reimplements it. ADR 0009 records that reason, as ADR 0004 requires.
+#
+# Target-gated, so a build or a test on an ordinary machine does not compile it at all,
+# and so nothing outside `src/browser.rs` can reach for it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.129"
+
+[lints]
+workspace = true
