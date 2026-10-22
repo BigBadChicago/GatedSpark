@@ -16,6 +16,15 @@
 //! It is not a test and asserts nothing. It prints a table; a person reads it and
 //! decides. `tests/generation.rs` holds the claims that must always hold.
 //!
+//! One column is here because of a mistake. An earlier version printed the forced-move
+//! ratio and nothing else about work done, and a first reading of its output concluded
+//! that the ratio spreads out on sparser boards. It does not: it is exactly 1000 for
+//! every puzzle that needs no guessing, because the ratio is measured at the first
+//! fixpoint and a line-solvable puzzle is finished there. All of the apparent spread
+//! came from the handful of puzzles that needed a guess. The column that actually
+//! separates one line-solvable puzzle from another is `propagation rounds`, so this
+//! prints both and labels which population each describes.
+//!
 //! Release mode matters: the line solver probes every undecided cell both ways, so a
 //! debug build of the larger sizes is slow enough to look broken.
 
@@ -38,7 +47,19 @@ fn main() {
     .ok();
     writeln!(
         out,
-        "\n size  fill smooth |   kept | guessing | deepest guess | forced per mille"
+        "'rounds' is propagation rounds among the kept puzzles that need NO guessing: \
+         min/median/max. That is the column that grades them."
+    )
+    .ok();
+    writeln!(
+        out,
+        "'forced' is the forced-move ratio over ALL kept puzzles. It is 1000 for every \
+         line-solvable one, so any spread shown is the guessing ones alone."
+    )
+    .ok();
+    writeln!(
+        out,
+        "\n size  fill smooth |   kept | guessing | deepest | rounds (no-guess only) | forced"
     )
     .ok();
 
@@ -68,12 +89,35 @@ fn main() {
                 let low = forced.iter().copied().min().unwrap_or(0);
                 let high = forced.iter().copied().max().unwrap_or(0);
 
+                let mut rounds: Vec<u32> = kept
+                    .iter()
+                    .filter(|c| c.features.line_solvable())
+                    .map(|c| c.features.propagation_rounds)
+                    .collect();
+                rounds.sort_unstable();
+                let rounds_summary = if rounds.is_empty() {
+                    "          none".to_string()
+                } else {
+                    let n = rounds.len();
+                    format!(
+                        "{:>2}/{:>2}/{:<2} ({} distinct)",
+                        rounds[0],
+                        rounds[n / 2],
+                        rounds[n - 1],
+                        {
+                            let mut d = rounds.clone();
+                            d.dedup();
+                            d.len()
+                        }
+                    )
+                };
+
                 // Flushed per line on purpose. A long run should show its work as it
                 // goes rather than appear to hang and then dump everything at once.
                 writeln!(
                     out,
                     "{w:>2}x{h:<2} {fill:>5} {smoothing_rounds:>6} | {:>3}/{SEEDS} | \
-                     {guessing:>8} | {deepest:>13} | {low:>4}..{high}",
+                     {guessing:>8} | {deepest:>7} | {rounds_summary:>22} | {low:>4}..{high}",
                     report.kept
                 )
                 .ok();

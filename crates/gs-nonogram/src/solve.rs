@@ -76,6 +76,15 @@ impl Features {
 
     /// The share of cells propagation settled on its own, in tenths of a percent, so
     /// the feature vector stays integer-only like everything else.
+    ///
+    /// **Measured 2026-10-22: this does not grade a line-solvable puzzle.** It is
+    /// exactly 1000 for every puzzle that needs no guessing, because it is counted at
+    /// the first fixpoint and such a puzzle is already finished there. So it carries
+    /// the same information as [`Features::line_solvable`] and nothing more. The field
+    /// that actually separates one line-solvable puzzle from another is
+    /// [`Features::propagation_rounds`], which was measured spreading from 2 to 14.
+    /// Kept because it is the right number for a puzzle that *does* need guessing,
+    /// where it says how much was free before the first guess.
     #[must_use]
     pub fn forced_ratio_per_mille(&self) -> u32 {
         if self.cells == 0 {
