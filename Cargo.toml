@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/gs-core"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.97"
+license = "UNLICENSED"
+
+[workspace.lints.rust]
+# Logical game state must be integer-only: the architecture plan forbids making
+# correctness depend on hardware floating-point behaviour. M1 adds the test that
+# enforces this for state types; these lints are the cheap half of it.
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+float_arithmetic = "deny"

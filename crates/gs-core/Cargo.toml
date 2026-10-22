@@ -1,0 +1,12 @@
+[package]
+name = "gs-core"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "GatedSpark deterministic core: puzzle DSL, transition semantics, state hashing, replay."
+
+[lints]
+workspace = true
+
+[dependencies]
