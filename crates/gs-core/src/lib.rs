@@ -31,6 +31,7 @@ pub mod registry;
 pub mod report;
 pub mod rng;
 pub mod ruleset;
+pub mod schedule;
 pub mod state;
 pub mod timeline;
 pub mod verification;

@@ -39,13 +39,13 @@ use crate::browser::Page;
 const OURS: &str = "gatedspark/";
 
 /// The browser's own storage, behind the four operations the buffer needs.
-struct LocalStorage {
+pub(crate) struct LocalStorage {
     inner: web_sys::Storage,
 }
 
 impl LocalStorage {
     /// Fails when the browser will not give it out at all, which a private window does.
-    fn open() -> Result<Self, ShelfError> {
+    pub(crate) fn open() -> Result<Self, ShelfError> {
         let window = web_sys::window()
             .ok_or_else(|| ShelfError::new("there is no browser window to store anything in"))?;
         let inner = window

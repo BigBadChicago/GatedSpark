@@ -201,14 +201,18 @@
   <p class="tagline">A puzzle this page checked for itself before drawing it.</p>
 
   <div class="controls">
-    <label class="count" for="pick">Puzzle</label>
-    <select id="pick"></select>
+    <label class="count" for="game-pick">Game</label>
+    <select id="game-pick"></select>
+    <label class="count" for="day-pick">Day</label>
+    <select id="day-pick"></select>
   </div>
+  <p class="saved-line" id="today-line">Looking for today&rsquo;s puzzle&hellip;</p>
 
   <section class="saved">
     <p class="saved-line" id="saved-line">Checking what is saved on this device…</p>
     <div class="controls">
       <button id="save" type="button">Save this one for later</button>
+      <button id="save-ahead" type="button">Save the next few days</button>
       <button id="play-saved" type="button">Play a saved one</button>
       <button id="offline" type="button" aria-pressed="false">Pretend there is no signal</button>
       <button id="check-withdrawn" type="button">Check for withdrawn puzzles</button>
@@ -256,7 +260,6 @@
 
 import init, { Page, Square, Side, Drawn } from "./core/gs_web.js";
 import { TRUSTED_KEY_ID, TRUSTED_PUBLIC_KEY } from "./trusted-key.js";
-import { PUZZLES } from "./puzzles.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -294,6 +297,12 @@ const HOW_TO = {
     "Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.",
   slitherlink:
     "Tap between two dots to draw a line, again to rule it out, again to clear it. Ruling lines out is just for you: the puzzle is done when the lines make one loop and every number is met.",
+};
+
+/** What each game is called, for the picker. One line per game, like HOW_TO above. */
+const NAMES = {
+  nonogram: "Nonogram",
+  slitherlink: "Slitherlink",
 };
 
 let game = null;
@@ -661,6 +670,125 @@ async function checkWithdrawn() {
   }
 }
 
+/** Today, as this device's clock has it.
+ *
+ *  The clock's entire job. It picks which day to look up in a file that was signed
+ *  before it was read, so a wrong clock shows the wrong day's puzzle and can do nothing
+ *  else: it cannot make a bad puzzle look good, revive a withdrawn one, or invent a day
+ *  nobody signed. */
+function today() {
+  const now = new Date();
+  return [now.getFullYear(), now.getMonth() + 1, now.getDate()];
+}
+
+/** Fetch the signed schedule and hand it to the core.
+ *
+ *  Everything that matters happens inside `accept_schedule`: the signature, and whether
+ *  it is newer than the one this device already has. A device that already has one keeps
+ *  working with no signal, which is why a failure here is a sentence and not a dead
+ *  page. */
+async function fetchSchedule() {
+  if (pretendOffline) return;
+  let bytes;
+  try {
+    const response = await fetch("store/schedule.gspk");
+    if (!response.ok) throw new Error(`the server said ${response.status}`);
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (problem) {
+    el("today-line").textContent = `Could not fetch the schedule: ${problem.message}`;
+    return;
+  }
+  try {
+    page.accept_schedule(bytes);
+  } catch (problem) {
+    // Includes the case where this device already has a newer one, which is a refusal
+    // and not a fault.
+    el("today-line").textContent = problem.message;
+  }
+}
+
+/** Fill the game picker from the schedule. */
+function refreshGames() {
+  const games = page.scheduled_games();
+  el("game-pick").replaceChildren(
+    ...games.map((family) =>
+      Object.assign(document.createElement("option"), {
+        value: family,
+        textContent: NAMES[family] ?? family,
+      })
+    )
+  );
+  return games;
+}
+
+/** Fill the day picker with today and the days before it, and say what today holds.
+ *
+ *  The archive comes from the core, which refuses to list a day that has not arrived.
+ *  A page that filtered the list itself would be a second answer to "has this day
+ *  happened", and one of the two would be wrong. */
+function refreshDays(family) {
+  const [year, month, day] = today();
+  const days = page.archive(year, month, day, family);
+  el("day-pick").replaceChildren(
+    ...days.map((entry, index) =>
+      Object.assign(document.createElement("option"), {
+        value: entry.name(),
+        textContent: index === 0 ? `${entry.date()} (today)` : entry.date(),
+      })
+    )
+  );
+  const line = el("today-line");
+  if (days.length === 0) {
+    line.textContent = page.has_schedule()
+      ? "The schedule has no puzzle for today for this game yet."
+      : "This device has no schedule yet, so there is no puzzle for today. Connect to the internet to get one.";
+  } else {
+    line.textContent = `Today is ${days[0].date()}. ${days.length - 1} earlier ${
+      days.length === 2 ? "day is" : "days are"
+    } in the archive.`;
+  }
+  return days;
+}
+
+/** Download the next few days and keep them on the device.
+ *
+ *  The one place a day that has not arrived is deliberately fetched, because downloading
+ *  ahead is the whole point of holding puzzles on a device. They are saved, not shown:
+ *  the day picker still refuses to list them until their day comes. */
+async function saveAhead(family) {
+  if (pretendOffline) {
+    el("note").textContent = "There is no signal, so nothing can be downloaded ahead.";
+    return;
+  }
+  const [year, month, day] = today();
+  const coming = page.to_download(year, month, day, family, 5);
+  if (coming.length === 0) {
+    el("note").textContent = "The schedule has no further days to download yet.";
+    return;
+  }
+  let saved = 0;
+  for (const entry of coming) {
+    try {
+      const response = await fetch(`store/${entry.name()}/package.gspk`);
+      if (!response.ok) throw new Error(`the server said ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      page.save_for_later(bytes);
+      saved += 1;
+    } catch (problem) {
+      // Said rather than swallowed, and the ones already saved stay saved. Running out
+      // of room is a different fact from a day that cannot be fetched.
+      el("note").textContent = `Stopped after ${saved}: ${problem.message}`;
+      refreshSaved();
+      return;
+    }
+  }
+  el("note").textContent =
+    saved === 1
+      ? "Saved the next day. It will still be here with no signal."
+      : `Saved the next ${saved} days. They will still be here with no signal.`;
+  refreshSaved();
+}
+
 async function main() {
   await init();
 
@@ -673,17 +801,11 @@ async function main() {
     return;
   }
 
-  const pick = el("pick");
-  pick.replaceChildren(
-    ...PUZZLES.map((name) =>
-      Object.assign(document.createElement("option"), {
-        value: name,
-        // Eight characters is plenty to tell them apart and short enough to read.
-        textContent: name.slice(0, 8),
-      })
-    )
-  );
-  pick.addEventListener("change", () => open(pick.value));
+  el("game-pick").addEventListener("change", () => {
+    const days = refreshDays(el("game-pick").value);
+    if (days.length > 0) void open(days[0].name());
+  });
+  el("day-pick").addEventListener("change", () => open(el("day-pick").value));
 
   el("board").addEventListener("click", (event) => {
     const td = event.target.closest("td.square");
@@ -761,15 +883,39 @@ async function main() {
 
   refreshSaved();
 
-  // A name in the address is how a link to one puzzle works. Otherwise the first one.
+  el("save-ahead").addEventListener("click", () => {
+    void saveAhead(el("game-pick").value);
+  });
+
+  refreshSaved();
+
+  // The schedule first: without it the page has nothing to ask for.
+  await fetchSchedule();
+  const games = refreshGames();
+
+  // A name in the address still works, because a puzzle's name is its own fingerprint
+  // and so a link to one needs no index to resolve it. It is how a withdrawn puzzle or
+  // an old day gets looked at directly.
   const wanted = new URLSearchParams(location.search).get("puzzle");
-  const first = wanted && PUZZLES.includes(wanted) ? wanted : PUZZLES[0];
-  if (!first) {
-    showRefusal("This copy of the page has no puzzles in it. Run scripts/demo-web.sh.");
+  if (wanted) {
+    if (games.length > 0) refreshDays(games[0]);
+    await open(wanted);
     return;
   }
-  pick.value = first;
-  await open(first);
+
+  if (games.length === 0) {
+    showRefusal(
+      "This device has no schedule, so there is no puzzle to play. Connect to the " +
+        "internet, or run scripts/demo-web.sh if this is your own copy."
+    );
+    return;
+  }
+
+  const family = games[0];
+  el("game-pick").value = family;
+  const days = refreshDays(family);
+  if (days.length === 0) return;
+  await open(days[0].name());
 }
 
 // Exposed so a test can drive the page the way a person does, and so a mistake in here
@@ -787,6 +933,20 @@ window.gatedspark = {
   save: () => el("save").click(),
   playSaved: () => el("play-saved").click(),
   toggleOffline: () => el("offline").click(),
+  todayLine: () => el("today-line").textContent,
+  games: () => Array.from(el("game-pick").options).map((o) => o.value),
+  days: () => Array.from(el("day-pick").options).map((o) => o.textContent),
+  chooseGame: (family) => {
+    el("game-pick").value = family;
+    el("game-pick").dispatchEvent(new Event("change"));
+  },
+  chooseDay: (index) => {
+    el("day-pick").selectedIndex = index;
+    el("day-pick").dispatchEvent(new Event("change"));
+  },
+  saveAhead: () => saveAhead(el("game-pick").value),
+  scheduleSeen: () => page.schedule_seen(),
+  toDownload: (y, m, d, family, most) => page.to_download(y, m, d, family, most),
   checkWithdrawn,
   withdrawalsSeen: () => page.withdrawals_seen(),
   boardIsShowing: () => !el("game").hidden,

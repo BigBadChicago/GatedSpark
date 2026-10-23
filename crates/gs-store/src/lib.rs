@@ -103,6 +103,7 @@ use std::path::{Path, PathBuf};
 use gs_core::content::{ContentId, Digest};
 use gs_core::hash::StateHash;
 use gs_core::package::{open, Opened, RecordedReplay, SignatureVerifier};
+use gs_core::schedule::{open_schedule, OpenedSchedule};
 use gs_core::withdrawal::{open_list, OpenedList};
 
 /// The file inside a puzzle's directory that holds the package.
@@ -117,6 +118,14 @@ pub const WITNESS_FILE: &str = "witness.bin";
 /// whole and there is exactly one current one. [`Store::list`] skips it, because it only
 /// reports directories.
 pub const WITHDRAWALS_FILE: &str = "withdrawals.gspk";
+
+/// The file at the store's root that holds the signed schedule: which puzzle is each
+/// day's.
+///
+/// At the root for the same reasons as the withdrawal list: it is about the store as a
+/// whole, there is exactly one current one, and [`Store::list`] skips it because that
+/// only reports directories.
+pub const SCHEDULE_FILE: &str = "schedule.gspk";
 
 /// Why a store operation failed.
 #[derive(Debug)]
@@ -138,6 +147,8 @@ pub enum StoreError {
     /// sharing the one above, because "the list of withdrawn puzzles is unreadable" and
     /// "a puzzle is unreadable" need very different responses from whoever reads this.
     NotAValidList(gs_core::package::OpenError),
+    /// The schedule could not be opened. Same rule as a list: it never goes in.
+    NotAValidSchedule(gs_core::package::OpenError),
     /// The package says its witness replayed to one hash, and the stored witness hashes
     /// to another. Either the answer file was replaced, or it belongs to a different
     /// puzzle.
@@ -183,6 +194,9 @@ impl std::fmt::Display for StoreError {
             StoreError::NotAValidPackage(why) => write!(f, "not a valid package: {why:?}"),
             StoreError::NotAValidList(why) => {
                 write!(f, "not a valid list of withdrawn puzzles: {why:?}")
+            }
+            StoreError::NotAValidSchedule(why) => {
+                write!(f, "not a valid schedule: {why:?}")
             }
             StoreError::WitnessDoesNotMatch { signed, stored } => write!(
                 f,
@@ -468,6 +482,69 @@ impl Store {
             Ok(bytes) => open_list(&bytes, digest, verifier)
                 .map(Some)
                 .map_err(StoreError::NotAValidList),
+        }
+    }
+
+    /// Where the current schedule is kept.
+    #[must_use]
+    pub fn schedule_path(&self) -> PathBuf {
+        self.root.join(SCHEDULE_FILE)
+    }
+
+    /// Write a signed schedule, checking it first.
+    ///
+    /// The same rule as [`Store::put`] and [`Store::put_withdrawals`]: nothing enters
+    /// this store unverified, so a schedule every device would refuse is found by the
+    /// publisher rather than by the players.
+    ///
+    /// It does **not** check that the serial number is higher than the one already
+    /// there, for the same reason `put_withdrawals` does not: that is a decision about
+    /// what to publish, not about what a store may hold. [`Store::schedule`] is how the
+    /// caller finds out what is there.
+    pub fn put_schedule<D: Digest, V: SignatureVerifier>(
+        &self,
+        bytes: &[u8],
+        digest: &D,
+        verifier: &V,
+    ) -> Result<OpenedSchedule, StoreError> {
+        let opened =
+            open_schedule(bytes, digest, verifier).map_err(StoreError::NotAValidSchedule)?;
+        let path = self.schedule_path();
+        // Written beside the target and renamed, as the withdrawal list is, so an
+        // interrupted write leaves yesterday's schedule in place rather than half of a
+        // new one. Half a schedule is refused by every device, which is safe but means
+        // nobody has a puzzle today.
+        let staging = self.root.join(".schedule.gspk.part");
+        io(
+            format!("writing {}", staging.display()),
+            std::fs::write(&staging, bytes),
+        )?;
+        io(
+            format!("putting {} in place", path.display()),
+            std::fs::rename(&staging, &path),
+        )?;
+        Ok(opened)
+    }
+
+    /// The current schedule, read back through its signature.
+    ///
+    /// `Ok(None)` means no schedule has been published, which is not the same as a
+    /// schedule with no days in it.
+    pub fn schedule<D: Digest, V: SignatureVerifier>(
+        &self,
+        digest: &D,
+        verifier: &V,
+    ) -> Result<Option<OpenedSchedule>, StoreError> {
+        let path = self.schedule_path();
+        match std::fs::read(&path) {
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(cause) => Err(StoreError::Io {
+                doing: format!("reading {}", path.display()),
+                cause,
+            }),
+            Ok(bytes) => open_schedule(&bytes, digest, verifier)
+                .map(Some)
+                .map_err(StoreError::NotAValidSchedule),
         }
     }
 

@@ -54,18 +54,21 @@ export const TRUSTED_KEY_ID = "${key_id}";
 export const TRUSTED_PUBLIC_KEY = "${public}";
 JSEOF
 
-echo "==> writing the list of puzzles the page can offer"
-{
-    echo "// Which puzzles this copy of the page knows about, newest build first."
-    echo "// A real deployment gets this from wherever it lists content; the page only"
-    echo "// needs names, because a name is a puzzle's own fingerprint."
-    echo "export const PUZZLES = ["
-    for dir in "$www"/store/*/; do
-        name=$(basename "$dir")
-        echo "  \"${name}\","
-    done
-    echo "];"
-} > "$www/puzzles.js"
+# The schedule, which is how the page knows what today's puzzle is. There is no list of
+# puzzles written into the page any more: it fetches this file, checks its signature, and
+# looks today up in it.
+#
+# One day per puzzle made, ending today: the start day is however many days back it
+# takes for the last scheduled day to be today. That way the page has a puzzle for today
+# AND something in the archive, which is what there is to look at.
+back=$((count - 1))
+start=$(date -u -d "$back days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"$back"d +%Y-%m-%d)
+echo "==> scheduling $count days per game, counting from $start"
+cargo run --quiet -p gs-cli -- schedule \
+    --store "$www/store" \
+    --key "$key" \
+    --start "$start" \
+    --days "$count"
 
 made=$(find "$www/store" -maxdepth 1 -type d | tail -n +2 | wc -l)
 echo
