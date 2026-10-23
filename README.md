@@ -62,7 +62,10 @@ What exists and is enforced by a test is listed in
 repository claims to be enforced without naming the test that enforces it; where something is not
 yet enforced, it says so.
 
-M5 is being built in three pieces. The first two exist. Piece one made a solver answerable from
+M5 is being built in four pieces, and all four exist. What is left of the slice is the offline
+buffer: five games stored, five ahead, one bookmark in a pre-shuffled order.
+
+Piece one made a solver answerable from
 shipped code rather than from a test file: `gs-solver` runs a solver as a separate program and
 turns *every* failure — a solver that will not start, dies, runs out of time, prints nothing,
 prints something unparseable, or prints two contradictory answers — into "nobody knows", never into
@@ -70,7 +73,8 @@ prints something unparseable, or prints two contradictory answers — into "nobo
 [`docs/adr/0007-running-a-real-solver.md`](docs/adr/0007-running-a-real-solver.md).
 
 Piece two is the store and the command, described in the next section. Piece three carries the
-trust chain into a browser, and is described below it.
+trust chain into a browser. Piece four is the page a player actually taps on. Both are described
+below.
 
 ## One command, end to end
 
@@ -122,8 +126,8 @@ on the web now and on a desktop later without being rewritten. It loads a puzzle
 `gatedspark fill` wrote, **checks the signature itself** against a key the page ships with, and
 refuses everything else. The compressed download is 57 KB.
 
-A puzzle is also playable: marking squares, undo and redo, and knowing when it is solved. What is
-still missing is the page itself — the drawing and the tapping — and the offline buffer.
+A puzzle is also playable: marking squares, undo and redo, and knowing when it is solved. And there
+is now a page to play it on, below. What is still missing is the offline buffer.
 
 The rule that keeps playing honest is that **nothing in the browser decides whether a board is
 finished.** It asks `Nonogram::is_solved`, which checks the clues rather than a remembered answer,
@@ -178,6 +182,47 @@ real SHA-256 and real Ed25519 give the same answers in a browser's WebAssembly e
 
 The reasoning for all of it is in
 [`docs/adr/0009-the-browser-version.md`](docs/adr/0009-the-browser-version.md).
+
+
+## The page
+
+`crates/gs-web/www/index.html` is a board you can tap: the clue numbers along the top and the left,
+a grid, one tap to fill a square, another to cross it out, another to clear it, undo and redo, a
+count of moves, and a line that appears when the puzzle is solved. Underneath it, the page shows
+what it checked — who signed the puzzle, its level, its fingerprint, and what "one answer only" was
+proved relative to.
+
+**The page decides nothing.** It asks the core on every change whether the board is finished, and
+draws whatever it is told. A page that counted the squares itself would be a second answer to that
+question, and one of the two answers would eventually be wrong.
+
+To see it:
+
+```text
+scripts/build-web.sh    # compiles the core for a browser
+scripts/demo-web.sh     # makes a development key and fills the page with real puzzles
+python3 -m http.server 8080 --directory crates/gs-web/www
+```
+
+Then open `http://127.0.0.1:8080/`, or `?puzzle=<name>` for one in particular. A puzzle's name is
+its own fingerprint, which is why a link to one needs no index to resolve it.
+
+### Driving the real page
+
+```text
+scripts/check-page.sh
+```
+
+Opens the page in a real browser, plays a whole puzzle to the end, and takes pictures along the way.
+It checks that a grid is drawn, that taps and undo do what they say, that the solved message appears
+when the rules say the board is finished **and not when one square is changed**, that switching
+puzzles forgets the old game, and that a package with one byte altered is refused in a sentence a
+person can read. It is not in CI: it needs a browser-driving dependency this project has not taken
+on, and that is a decision worth making on purpose. Run it by hand before changing the page.
+
+One thing it found, which is a question rather than a bug: finishing a 15 by 15 puzzle took **372
+taps** for 93 filled squares, because `is_solved` requires every blank to be crossed out too. Most
+nonograms treat crossing out as optional. See ADR 0010.
 
 ## Building
 

@@ -3,3 +3,11 @@
 # Signing keys. `gatedspark keygen` refuses to write one inside a repository;
 # this is the second line of defence for one written by hand.
 *.key
+
+# The browser build and the demo content. Both are made by scripts in `scripts/`, from
+# the source that is in this repository, so keeping copies here would be keeping a
+# second version of things that already exist once.
+/crates/gs-web/www/core/
+/crates/gs-web/www/store/
+/crates/gs-web/www/trusted-key.js
+/crates/gs-web/www/puzzles.js

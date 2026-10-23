@@ -7,9 +7,11 @@
 //! The point being proved is narrow and worth stating plainly: **a browser decides for
 //! itself whether to believe a puzzle.** Nothing here asks a server anything.
 
-use gs_core::package::{seal, RecordedReplay};
+use gs_core::content::ContentId;
+use gs_core::package::{seal, OpenError, RecordedReplay};
 use gs_core::verification::{Outcome, Verifier};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
+use gs_nonogram::clues::DecodeError;
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::generate::Candidate;
 use gs_nonogram::publish::{manifest_for, publish, report_for, Published};
@@ -335,7 +337,7 @@ fn every_refusal_explains_itself_in_words_a_person_can_read() {
     let cases = [
         (
             load(b"not a package", &Sha256, &the_page_trusts_us()),
-            "accept",
+            "is not a GatedSpark puzzle",
         ),
         (
             load(
@@ -365,7 +367,7 @@ fn every_refusal_explains_itself_in_words_a_person_can_read() {
                 &Sha256,
                 &the_page_trusts_us(),
             ),
-            "a bug here, not a damaged download",
+            "a fault in this program",
         ),
     ];
 
@@ -376,10 +378,70 @@ fn every_refusal_explains_itself_in_words_a_person_can_read() {
             "a refusal should mention {expected:?}, got: {why}"
         );
         assert!(
-            !why.contains("NotPlayable"),
-            "a person should not be shown a type name: {why}"
+            reads_as_words(&why),
+            "a person should not be shown code: {why}"
         );
     }
+}
+
+/// True when a string looks like a sentence rather than like source code.
+///
+/// The test this serves used to check only that the words "NotPlayable" were absent,
+/// and it passed on the message `this is not a puzzle this page will accept:
+/// SignatureRejected` — which is exactly the fault it was written to catch. Two words
+/// run together with a capital in the middle is what a type name looks like and what
+/// English does not, so that is what this looks for.
+fn reads_as_words(message: &str) -> bool {
+    // The project's own name has a capital in the middle of it, which is the one case
+    // where that is a real word and not a type name. It is spelt out here so that the
+    // check below stays as blunt as it is.
+    let message = &message.replace("GatedSpark", "the project");
+    let mut previous = ' ';
+    for letter in message.chars() {
+        if previous.is_ascii_lowercase() && letter.is_ascii_uppercase() {
+            return false;
+        }
+        previous = letter;
+    }
+    !message.is_empty() && !message.contains("::") && !message.contains('{')
+}
+
+#[test]
+fn every_single_reason_a_package_can_be_refused_is_written_in_words() {
+    // The loop above covers the refusals a test can actually provoke. This covers the
+    // rest, including the ones that need a damaged file nobody can easily build, by
+    // asking each reason for its words directly. The match inside `plainly` is
+    // exhaustive, so a reason added upstream will not compile until it has a sentence;
+    // this is the half that checks the sentences are sentences.
+    let reasons = [
+        OpenError::NotAPackage,
+        OpenError::UnsupportedFormat(9),
+        OpenError::Truncated { field: "manifest" },
+        OpenError::TrailingBytes(4),
+        OpenError::ContentIdMismatch {
+            stated: [0; 32],
+            computed: ContentId::of(&Sha256, b"something else"),
+        },
+        OpenError::SignatureRejected,
+        OpenError::Malformed { field: "family" },
+    ];
+
+    for reason in reasons {
+        let shown = NotPlayable::NotAValidPackage(reason).to_string();
+        assert!(reads_as_words(&shown), "not words a person reads: {shown}");
+        assert!(
+            shown.ends_with('.') || shown.ends_with("it."),
+            "a sentence ends with a full stop: {shown}"
+        );
+        assert!(
+            shown.len() > 30,
+            "a refusal should say something: {shown:?}"
+        );
+    }
+
+    // The same for an unreadable board, which is the other reason with a nested cause.
+    let shown = NotPlayable::UnreadablePuzzle(DecodeError::TrailingBytes(3)).to_string();
+    assert!(reads_as_words(&shown), "not words a person reads: {shown}");
 }
 
 #[test]

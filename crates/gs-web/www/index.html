@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GatedSpark</title>
+<style>
+  :root {
+    --ink: #17171a;
+    --paper: #fbfbf9;
+    --line: #d2d0c8;
+    --line-strong: #9a978d;
+    --filled: #17171a;
+    --empty-mark: #a8a49a;
+    --accent: #1f6f5c;
+    --warn: #8c2f1f;
+    --muted: #6b6860;
+    --tap: 2.1rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #ecebe6;
+      --paper: #16161a;
+      --line: #3a3a42;
+      --line-strong: #65646e;
+      --filled: #ecebe6;
+      --empty-mark: #6b6a74;
+      --accent: #58b79c;
+      --warn: #e08a76;
+      --muted: #9a98a2;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #ecebe6; --paper: #16161a; --line: #3a3a42; --line-strong: #65646e;
+    --filled: #ecebe6; --empty-mark: #6b6a74; --accent: #58b79c; --warn: #e08a76;
+    --muted: #9a98a2;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 1rem/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 1rem 16px 3rem;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 44rem; margin: 0 auto; }
+
+  h1 { font-size: 1.25rem; margin: 0 0 .15rem; letter-spacing: -.01em; }
+  .tagline { color: var(--muted); font-size: .85rem; margin: 0 0 1.25rem; }
+
+  /* ---- the board ---------------------------------------------------- */
+  .board-scroll { overflow-x: auto; padding-bottom: .5rem; }
+  table.board { border-collapse: collapse; margin: 0 auto; }
+  table.board th, table.board td { padding: 0; }
+
+  /* Clue numbers. Columns read downwards, rows read across. */
+  th.col-clue {
+    vertical-align: bottom;
+    font-size: .68rem;
+    font-weight: 600;
+    color: var(--muted);
+    line-height: 1.15;
+    padding-bottom: .25rem;
+    min-width: var(--tap);
+  }
+  th.col-clue span { display: block; }
+  th.row-clue {
+    text-align: right;
+    font-size: .72rem;
+    font-weight: 600;
+    color: var(--muted);
+    padding-right: .4rem;
+    white-space: nowrap;
+    height: var(--tap);
+  }
+  th.corner { width: 1px; }
+
+  td.square {
+    width: var(--tap);
+    height: var(--tap);
+    border: 1px solid var(--line);
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Every fifth line heavier, which is how people actually count a grid. */
+  td.square.block-left { border-left-color: var(--line-strong); border-left-width: 2px; }
+  td.square.block-top { border-top-color: var(--line-strong); border-top-width: 2px; }
+  td.square.edge-right { border-right-color: var(--line-strong); border-right-width: 2px; }
+  td.square.edge-bottom { border-bottom-color: var(--line-strong); border-bottom-width: 2px; }
+
+  td.square[data-mark="0"] { background: var(--filled); }
+  td.square[data-mark="1"]::before,
+  td.square[data-mark="1"]::after {
+    content: "";
+    position: absolute;
+    left: 28%; right: 28%; top: 50%;
+    border-top: 2px solid var(--empty-mark);
+  }
+  td.square[data-mark="1"]::before { transform: rotate(45deg); }
+  td.square[data-mark="1"]::after { transform: rotate(-45deg); }
+  td.square:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+
+  /* ---- controls ------------------------------------------------------ */
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0 .5rem; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    color: var(--ink);
+    background: transparent;
+    border: 1.5px solid var(--line-strong);
+    border-radius: .45rem;
+    padding: .5rem .9rem;
+    min-height: 2.75rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  button:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+  select {
+    font: inherit; color: var(--ink); background: transparent;
+    border: 1.5px solid var(--line-strong); border-radius: .45rem;
+    padding: .5rem; min-height: 2.75rem; max-width: 100%;
+  }
+
+  .count { color: var(--muted); font-size: .85rem; align-self: center; }
+
+  /* ---- messages ------------------------------------------------------ */
+  .solved {
+    margin: 1rem 0;
+    padding: .8rem 1rem;
+    border: 2px solid var(--accent);
+    border-radius: .5rem;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .refused {
+    margin: 1rem 0;
+    padding: .8rem 1rem;
+    border: 2px solid var(--warn);
+    border-radius: .5rem;
+    color: var(--warn);
+  }
+  .note { color: var(--muted); font-size: .85rem; min-height: 1.5em; margin: .25rem 0 0; }
+  [hidden] { display: none !important; }
+
+  /* ---- what the page checked ---------------------------------------- */
+  .trust {
+    margin-top: 2rem;
+    border-top: 1px solid var(--line);
+    padding-top: 1rem;
+    font-size: .8rem;
+    color: var(--muted);
+  }
+  .trust h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .5rem; }
+  .trust dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .75rem; margin: 0; }
+  .trust dt { font-weight: 600; }
+  .trust dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GatedSpark</h1>
+  <p class="tagline">A puzzle this page checked for itself before drawing it.</p>
+
+  <div class="controls">
+    <label class="count" for="pick">Puzzle</label>
+    <select id="pick"></select>
+  </div>
+
+  <p id="refused" class="refused" hidden></p>
+
+  <div id="game" hidden>
+    <p id="solved" class="solved" hidden>Solved. Every clue matches.</p>
+
+    <div class="board-scroll">
+      <table class="board" id="board"></table>
+    </div>
+
+    <div class="controls">
+      <button id="undo" type="button">Undo</button>
+      <button id="redo" type="button">Redo</button>
+      <span class="count" id="moves">No moves yet</span>
+    </div>
+    <p class="note" id="note">Tap a square once to fill it, again to cross it out, again to clear it.</p>
+
+    <section class="trust">
+      <h2>What this page checked</h2>
+      <dl>
+        <dt>Signed by</dt><dd id="signed-by"></dd>
+        <dt>Level</dt><dd id="level"></dd>
+        <dt>Puzzle</dt><dd id="fingerprint"></dd>
+        <dt>Answers</dt><dd id="encoding"></dd>
+      </dl>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+// The page. It draws a board and sends taps to the core; it answers no question about
+// the puzzle itself.
+//
+// In particular it never works out whether the board is finished. It asks
+// `game.is_solved()` every time, which asks the rules, which check the clues. A second
+// opinion here would disagree with the first one day, and the wrong one would be the
+// one the player saw.
+
+import init, { Page, Square } from "./core/gs_web.js";
+import { TRUSTED_KEY_ID, TRUSTED_PUBLIC_KEY } from "./trusted-key.js";
+import { PUZZLES } from "./puzzles.js";
+
+const el = (id) => document.getElementById(id);
+
+/** Turn "a1b2" into the bytes it stands for. */
+function unhex(text) {
+  const out = new Uint8Array(text.length / 2);
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = Number.parseInt(text.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Tapping moves a square on by one: blank, filled, crossed out, blank. */
+const NEXT = {
+  [Square.Unknown]: Square.Filled,
+  [Square.Filled]: Square.Empty,
+  [Square.Empty]: Square.Unknown,
+};
+
+let game = null;
+
+function showRefusal(message) {
+  el("game").hidden = true;
+  el("refused").hidden = false;
+  // The core's own words. A page that wrote its own version of "we would not accept
+  // this" would eventually say something the core does not mean. The only change made
+  // here is the first letter, because these are written as sentences and shown as one.
+  el("refused").textContent = message.charAt(0).toUpperCase() + message.slice(1);
+}
+
+/** Build the grid once. Taps change squares in place after this. */
+function drawBoard() {
+  const width = game.width();
+  const height = game.height();
+  const table = el("board");
+  table.replaceChildren();
+
+  // The clue numbers across the top. Each column's numbers read downwards.
+  const head = document.createElement("tr");
+  head.appendChild(Object.assign(document.createElement("th"), { className: "corner" }));
+  for (let column = 0; column < width; column += 1) {
+    const th = document.createElement("th");
+    th.className = "col-clue";
+    const runs = Array.from(game.column_clue(column));
+    th.replaceChildren(
+      ...(runs.length ? runs : [0]).map((run) =>
+        Object.assign(document.createElement("span"), { textContent: String(run) })
+      )
+    );
+    head.appendChild(th);
+  }
+  table.appendChild(head);
+
+  for (let row = 0; row < height; row += 1) {
+    const tr = document.createElement("tr");
+    const runs = Array.from(game.row_clue(row));
+    tr.appendChild(
+      Object.assign(document.createElement("th"), {
+        className: "row-clue",
+        textContent: (runs.length ? runs : [0]).join(" "),
+      })
+    );
+    for (let column = 0; column < width; column += 1) {
+      const td = document.createElement("td");
+      td.className = "square";
+      if (column % 5 === 0 && column !== 0) td.classList.add("block-left");
+      if (row % 5 === 0 && row !== 0) td.classList.add("block-top");
+      if (column === width - 1) td.classList.add("edge-right");
+      if (row === height - 1) td.classList.add("edge-bottom");
+      td.dataset.row = String(row);
+      td.dataset.column = String(column);
+      td.tabIndex = 0;
+      td.setAttribute("role", "button");
+      td.setAttribute("aria-label", `row ${row + 1}, column ${column + 1}`);
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+}
+
+/** Copy the core's board onto the page. One call for the whole grid. */
+function refresh() {
+  const board = game.board();
+  const width = game.width();
+  for (const td of el("board").querySelectorAll("td.square")) {
+    const row = Number(td.dataset.row);
+    const column = Number(td.dataset.column);
+    td.dataset.mark = String(board[row * width + column]);
+  }
+
+  const moves = game.moves_made();
+  el("moves").textContent =
+    moves === 0 ? "No moves yet" : moves === 1 ? "1 move" : `${moves} moves`;
+
+  // Asked of the core, every single time.
+  el("solved").hidden = !game.is_solved();
+}
+
+function tap(td) {
+  const row = Number(td.dataset.row);
+  const column = Number(td.dataset.column);
+  const now = Number(td.dataset.mark);
+  const said = game.mark_and_say(row, column, NEXT[now]);
+  el("note").textContent = said;
+  refresh();
+}
+
+/** Hand the bytes to the core. Everything after this is drawing. */
+function openBytes(bytes) {
+  el("refused").hidden = true;
+
+  // The page's own key. Not the puzzle's, and not something fetched alongside it.
+  const page = new Page();
+  try {
+    page.trust(TRUSTED_KEY_ID, unhex(TRUSTED_PUBLIC_KEY));
+  } catch (problem) {
+    showRefusal(`This page's key is not usable: ${problem.message}`);
+    return;
+  }
+
+  let puzzle;
+  try {
+    puzzle = page.open(bytes);
+  } catch (problem) {
+    showRefusal(problem.message);
+    return;
+  }
+
+  el("signed-by").textContent = puzzle.signed_by();
+  el("level").textContent = puzzle.band() || "none given";
+  el("fingerprint").textContent = puzzle.fingerprint();
+  el("encoding").textContent = `one answer only, under ${puzzle.encoding()}`;
+
+  game = puzzle.play();
+  drawBoard();
+  refresh();
+  el("note").textContent =
+    "Tap a square once to fill it, again to cross it out, again to clear it.";
+  el("game").hidden = false;
+}
+
+async function open(name) {
+  el("refused").hidden = true;
+  let bytes;
+  try {
+    // A plain file, fetched by name. A puzzle's name is its own fingerprint, which is
+    // why no index is needed to find it.
+    const response = await fetch(`store/${name}/package.gspk`);
+    if (!response.ok) throw new Error(`the server said ${response.status}`);
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (problem) {
+    showRefusal(`Could not fetch that puzzle: ${problem.message}`);
+    return;
+  }
+  openBytes(bytes);
+}
+
+async function main() {
+  await init();
+
+  const pick = el("pick");
+  pick.replaceChildren(
+    ...PUZZLES.map((name) =>
+      Object.assign(document.createElement("option"), {
+        value: name,
+        // Eight characters is plenty to tell them apart and short enough to read.
+        textContent: name.slice(0, 8),
+      })
+    )
+  );
+  pick.addEventListener("change", () => open(pick.value));
+
+  el("board").addEventListener("click", (event) => {
+    const td = event.target.closest("td.square");
+    if (td) tap(td);
+  });
+  el("board").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const td = event.target.closest("td.square");
+    if (!td) return;
+    event.preventDefault();
+    tap(td);
+  });
+  el("undo").addEventListener("click", () => {
+    el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
+    refresh();
+  });
+  el("redo").addEventListener("click", () => {
+    el("note").textContent = game.redo() ? "" : "There is nothing to redo.";
+    refresh();
+  });
+
+  // A name in the address is how a link to one puzzle works. Otherwise the first one.
+  const wanted = new URLSearchParams(location.search).get("puzzle");
+  const first = wanted && PUZZLES.includes(wanted) ? wanted : PUZZLES[0];
+  if (!first) {
+    showRefusal("This copy of the page has no puzzles in it. Run scripts/demo-web.sh.");
+    return;
+  }
+  pick.value = first;
+  await open(first);
+}
+
+// Exposed so a test can drive the page the way a person does, and so a mistake in here
+// is visible in a browser console rather than silent.
+window.gatedspark = {
+  open,
+  openBytes,
+  tap: (row, column) =>
+    tap(el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`)),
+  isSolved: () => game.is_solved(),
+  movesMade: () => game.moves_made(),
+  undo: () => el("undo").click(),
+  redo: () => el("redo").click(),
+  boardAt: (row, column) =>
+    Number(
+      el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`).dataset.mark
+    ),
+};
+
+main().catch((problem) => showRefusal(`This page failed to start: ${problem.message}`));
+</script>
+</body>
+</html>
