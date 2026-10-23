@@ -18,3 +18,7 @@ gs-core = { path = "../gs-core" }
 # loop encoding refuses this family by name instead of verifying the easy half.
 # Nothing in this crate's own code knows the other family exists.
 gs-nonogram = { path = "../gs-nonogram" }
+# The real solver runner, used by `tests/solver_agreement.rs`. Test-only on purpose:
+# a puzzle family must not be able to answer its own questions, and the browser must
+# never contain anything that can launch a program. See ADR 0009.
+gs-solver = { path = "../gs-solver" }

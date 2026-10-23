@@ -144,10 +144,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Z3
-        run: sudo apt-get update && sudo apt-get install -y z3
-      - name: Show solver version
-        run: z3 --version
+      # Two solvers, not one. ADR 0002 asked for a second, independent solver
+      # cross-checking every verdict, and the tests have supported it through
+      # GATEDSPARK_SMT_SOLVER_2 since M2 while nothing in CI set it — so the
+      # cross-check existed and had never run. Both are in Ubuntu's own packages, so
+      # this costs one apt line and no vendoring.
+      - name: Install Z3 and CVC5
+        run: sudo apt-get update && sudo apt-get install -y z3 cvc5
+      - name: Show solver versions
+        run: z3 --version && cvc5 --version | head -1
       # The runner itself, before the encoding that goes through it. This is the only
       # test that shows a real solver really does print error output containing the
       # text `sat` on stdout, which is what `gs-solver`'s whole-line parsing exists to
@@ -158,10 +163,24 @@ jobs:
         run: cargo test -p gs-solver --test real_solver -- --nocapture
       # And the encoding through it. Since the test now drives `gs_solver` rather than
       # a copy of the same logic, this job checks the code that actually ships.
-      - name: Solver agreement
+      # Both families, each against both solvers. A disagreement between the two
+      # solvers about a uniqueness result fails the build, which is the whole point of
+      # having a second one: that claim is the only thing this platform asserts, and a
+      # wrong `unsat` from a single solver would look exactly like a right one.
+      - name: Solver agreement, Nonogram
         env:
           GATEDSPARK_REQUIRE_SOLVER: "1"
+          GATEDSPARK_SMT_SOLVER_2: cvc5
         run: cargo test -p gs-nonogram --test solver_agreement -- --nocapture
+      # Slitherlink's version of the same job, and the only place the one-piece half of
+      # the loop rule is checked against a program nobody here wrote. Its headline case
+      # is a board of two separate rings, which satisfies every local rule and must
+      # come back `unsat`.
+      - name: Solver agreement, Slitherlink
+        env:
+          GATEDSPARK_REQUIRE_SOLVER: "1"
+          GATEDSPARK_SMT_SOLVER_2: cvc5
+        run: cargo test -p gs-slitherlink --test solver_agreement -- --nocapture
       # M5's exit test, run for real: an empty folder becomes a signed, Z3-verified,
       # replayable puzzle, `show` reads its report back out of the signed bytes, and
       # `recheck` fails on a single flipped byte of the stored answer. Every other test
