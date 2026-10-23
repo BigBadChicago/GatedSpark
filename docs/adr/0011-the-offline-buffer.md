@@ -152,11 +152,10 @@ The browser download went from **57 KB compressed to 62 KB** — the buffer, the
 
 ## Not enforced
 
-* **Withdrawing a puzzle already downloaded.** `discard_spoiled` throws away anything
-  that fails its *own* checks, which covers a damaged or tampered file. It cannot cover
-  a puzzle that is perfectly signed and simply should not be played any more. That needs
-  an agreed way of publishing "do not play these", and it is **the last remaining hole in
-  the offline story**. It is named here rather than left to be noticed.
+* ~~**Withdrawing a puzzle already downloaded.**~~ **Closed 2026-10-23 by ADR 0012.**
+  `discard_spoiled` still only throws away what fails its *own* checks; withdrawing a
+  perfectly signed puzzle is now `gs_core::withdrawal` and `gs_offline::notices`, and the
+  four `Buffer` calls above all take the device's withdrawal list.
 * **Refilling from a server.** There is no server. The buffer is filled by being handed
   bytes, which is what a download does; deciding *when* to top up belongs with the thing
   that has a network. `Stock::wanted` is the number that side will need.

@@ -13,7 +13,14 @@
 //! They are still *real* packages: real SHA-256, real Ed25519, sealed by `gs_core::seal`
 //! and opened by `gs_core::open`. Nothing about the signature is pretended.
 
+// Shared by `buffering.rs` and `withdrawing.rs`. Each test binary gets its own copy of
+// this module and uses some of it, so every helper is unused somewhere. CI builds with
+// warnings as errors, and the alternative is splitting the helpers by which file wants
+// them, which is a worse arrangement than this line.
+#![allow(dead_code)]
+
 use gs_core::package::{seal, Manifest, RecordedReplay};
+use gs_core::withdrawal::{seal_list, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 
 /// A private key printed in a public repository, which is all anybody needs to know
@@ -86,4 +93,49 @@ fn a_manifest(number: u64) -> Manifest {
         measurements: Vec::new(),
         replay: RecordedReplay::NotAttempted,
     }
+}
+
+/// The fingerprint of a package, learnt the way a device learns it.
+#[must_use]
+pub fn id_of(package: &[u8]) -> gs_core::content::ContentId {
+    gs_core::package::open(package, &Sha256, &this_device_trusts_us())
+        .expect("our own package opens")
+        .content_id
+}
+
+/// A signed "do not play these" list, from the key this device trusts.
+#[must_use]
+pub fn a_withdrawal(serial: u64, named: &[(gs_core::content::ContentId, Reason)]) -> Vec<u8> {
+    seal_a_withdrawal(serial, named, &our_signer())
+}
+
+/// The same, from somebody this device has never heard of.
+#[must_use]
+pub fn a_withdrawal_from_a_stranger(
+    serial: u64,
+    named: &[(gs_core::content::ContentId, Reason)],
+) -> Vec<u8> {
+    seal_a_withdrawal(
+        serial,
+        named,
+        &Ed25519Signer::new(SOMEBODY_ELSE, &SOMEBODY_ELSES_PRIVATE_KEY),
+    )
+}
+
+fn seal_a_withdrawal(
+    serial: u64,
+    named: &[(gs_core::content::ContentId, Reason)],
+    signer: &Ed25519Signer,
+) -> Vec<u8> {
+    let list = WithdrawalList {
+        serial,
+        withdrawn: named
+            .iter()
+            .map(|(id, reason)| Withdrawn {
+                content_id: *id.as_bytes(),
+                reason: *reason,
+            })
+            .collect(),
+    };
+    seal_list(&list, &Sha256, signer).expect("a short list seals")
 }

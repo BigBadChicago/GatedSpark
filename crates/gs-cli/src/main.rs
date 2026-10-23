@@ -7,6 +7,7 @@
 //! gatedspark fill    --store <dir> --key <file> [...]    generate, verify, sign, store
 //! gatedspark show    --store <dir> <name>               print one puzzle's report
 //! gatedspark recheck --store <dir> --key <file>          re-check the whole store
+//! gatedspark withdraw --store <dir> --key <file> [...]   publish "do not play these"
 //! ```
 //!
 //! # Why `show` and `recheck` need a key
@@ -33,6 +34,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use gs_core::package::{RecordedReplay, Signer};
+use gs_core::withdrawal::{seal_list, OpenedList, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::difficulty::{propose_in_band, Band, BANDS};
 use gs_nonogram::publish::{publish, PublishError};
@@ -58,6 +60,22 @@ gatedspark — make and keep verified puzzles
   gatedspark recheck --store <dir> --key <file>
       Re-open every puzzle: recompute its fingerprint, check its signature, and
       check its stored answer against the fingerprint in the signed report.
+
+  gatedspark withdraw --store <dir> --key <file>
+                      [--add NAME] [--keep NAME] [--reason WHY] [--serial N]
+      Publish the signed list of puzzles that must not be played. With no --add
+      or --keep, it prints the current list and changes nothing.
+
+      --add NAME     withdraw this puzzle, as `list` prints its name
+      --keep NAME    drop this puzzle from the list, undoing a withdrawal
+      --reason WHY   why, for the --add puzzles: no-answer, many-answers,
+                     unsuitable, or mistake. Needed with --add.
+      --serial N     the list's number, which must go up. Defaults to one more
+                     than the current list's.
+
+      Withdrawing does NOT delete the puzzle from the store. The list is what
+      devices read; the puzzle stays where it is, so a mistaken withdrawal can be
+      undone with --keep.
 ";
 
 fn main() -> ExitCode {
@@ -82,6 +100,7 @@ fn run(args: &[String]) -> Result<(), String> {
         "fill" => fill(rest),
         "show" => show(rest),
         "recheck" => recheck(rest),
+        "withdraw" => withdraw(rest),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -137,6 +156,18 @@ impl Args {
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// Every value given for a flag, in the order they were written.
+    ///
+    /// `--add` can appear more than once, because withdrawing three puzzles is one
+    /// decision and should be one list with one serial number, not three.
+    fn all(&self, name: &str) -> Vec<&str> {
+        self.flags
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+            .collect()
     }
 
     fn required(&self, name: &str) -> Result<&str, String> {
@@ -459,4 +490,156 @@ fn recheck(args: &[String]) -> Result<(), String> {
         report.failures.len(),
         report.checked
     ))
+}
+
+// ---------------------------------------------------------------------------
+// withdraw
+// ---------------------------------------------------------------------------
+
+/// Publish the signed list of puzzles that must not be played.
+///
+/// # Why this does not delete anything
+///
+/// The list is what a device reads, and a device that already holds a puzzle is the
+/// whole reason the list exists. Deleting the puzzle from the store would make the
+/// withdrawal unprovable — nothing left to point at, and no way to undo a mistake. So
+/// the puzzle stays and the list names it.
+///
+/// # Why the serial number is worked out rather than asked for
+///
+/// It has to go up, and the only number it has to go up from is the one already in the
+/// store. Asking a person for it is asking them to read a file and add one, which they
+/// will eventually get wrong on the day it matters. `--serial` is still there, for
+/// publishing a list numbered higher than this store knows about.
+fn withdraw(args: &[String]) -> Result<(), String> {
+    let args = Args::parse(args)?;
+    args.reject_unknown(&["store", "key", "add", "keep", "reason", "serial"])?;
+    let store = Store::open(args.required("store")?).map_err(|e| e.to_string())?;
+    let (signer, trusted) = key_and_trust(args.required("key")?)?;
+
+    let current = store
+        .withdrawals(&Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+    let held = current.as_ref().map_or(0, |opened| opened.list.serial);
+
+    let adding = args.all("add");
+    let keeping = args.all("keep");
+
+    if adding.is_empty() && keeping.is_empty() {
+        print_withdrawals(current.as_ref(), &store);
+        return Ok(());
+    }
+
+    let reason =
+        match args.get("reason") {
+            Some(word) => reason_from(word)?,
+            None if adding.is_empty() => Reason::Mistake, // never used; nothing is being added
+            None => return Err(
+                "--reason is needed with --add: no-answer, many-answers, unsuitable, or mistake"
+                    .to_owned(),
+            ),
+        };
+
+    // Start from what is already withdrawn, minus anything being kept.
+    let mut withdrawn: Vec<Withdrawn> = current
+        .as_ref()
+        .map(|opened| opened.list.withdrawn.clone())
+        .unwrap_or_default();
+    for name in &keeping {
+        let before = withdrawn.len();
+        withdrawn.retain(|entry| hex(&entry.content_id) != *name);
+        if withdrawn.len() == before {
+            return Err(format!("--keep {name}: that puzzle is not on the list"));
+        }
+    }
+
+    for name in &adding {
+        // Opened from the store rather than parsed from the name. A content id in this
+        // codebase may only come from digesting something, and a name typed on a command
+        // line is a claim about a puzzle rather than a digest of one. Opening it also
+        // means a typo'd name is an error here instead of a withdrawal that names
+        // nothing and quietly protects nobody.
+        let stored = store
+            .get(name, &Sha256, &trusted)
+            .map_err(|e| format!("--add {name}: {e}"))?;
+        let id = *stored.package.content_id.as_bytes();
+        if withdrawn.iter().any(|entry| entry.content_id == id) {
+            return Err(format!("--add {name}: that puzzle is already withdrawn"));
+        }
+        withdrawn.push(Withdrawn {
+            content_id: id,
+            reason,
+        });
+    }
+
+    let serial: u64 = args.number("serial", held + 1)?;
+    if serial <= held {
+        return Err(format!(
+            "--serial {serial} is not higher than the {held} already published. A list \
+             numbered at or below the one a device already has is one the device will \
+             refuse, which is how an old list is stopped from un-withdrawing a puzzle."
+        ));
+    }
+
+    let list = WithdrawalList { serial, withdrawn };
+    let bytes = seal_list(&list, &Sha256, &signer).map_err(|e| format!("{e:?}"))?;
+    let written = store
+        .put_withdrawals(&bytes, &Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "wrote {} ({} bytes)",
+        store.withdrawals_path().display(),
+        bytes.len()
+    );
+    print_withdrawals(Some(&written), &store);
+    println!();
+    println!("The puzzles themselves are still in the store. This list is what devices");
+    println!("read, and a device deletes what it names the first time it reads it.");
+    Ok(())
+}
+
+fn reason_from(word: &str) -> Result<Reason, String> {
+    match word {
+        "no-answer" => Ok(Reason::NoAnswer),
+        "many-answers" => Ok(Reason::MoreThanOneAnswer),
+        "unsuitable" => Ok(Reason::Unsuitable),
+        "mistake" => Ok(Reason::Mistake),
+        other => Err(format!(
+            "no such reason: {other}\nknown reasons: no-answer many-answers unsuitable mistake"
+        )),
+    }
+}
+
+fn print_withdrawals(current: Option<&OpenedList>, store: &Store) {
+    let Some(opened) = current else {
+        // Not the same as a list naming nothing. One is a publisher who has said
+        // nothing; the other is a publisher saying nothing is withdrawn.
+        println!(
+            "no list of withdrawn puzzles in {} yet",
+            store.root().display()
+        );
+        return;
+    };
+    println!(
+        "list number {}, signed by {}",
+        opened.list.serial, opened.key_id
+    );
+    if opened.list.is_empty() {
+        println!("it names no puzzles: nothing is withdrawn");
+        return;
+    }
+    for entry in &opened.list.withdrawn {
+        println!("  {}", hex(&entry.content_id));
+        println!("      {}", entry.reason);
+    }
+}
+
+fn hex(id: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in id {
+        out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is a hex digit"));
+        out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is a hex digit"));
+    }
+    out
 }

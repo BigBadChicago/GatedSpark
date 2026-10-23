@@ -190,6 +190,7 @@
       <button id="save" type="button">Save this one for later</button>
       <button id="play-saved" type="button">Play a saved one</button>
       <button id="offline" type="button" aria-pressed="false">Pretend there is no signal</button>
+      <button id="check-withdrawn" type="button">Check for withdrawn puzzles</button>
     </div>
   </section>
 
@@ -371,8 +372,9 @@ function refreshSaved() {
 }
 
 /** Hand the bytes to the core. Everything after this is drawing. */
-/** Draw a puzzle the core has already accepted. Takes it on trust because `page.open`
- *  and `page.next_saved` are the only ways to get one, and both check it. */
+/** Draw a puzzle the core has already accepted. Takes it on trust because
+ *  `page.open_for_play` and `page.next_saved` are the only ways to get one, and both
+ *  check it. */
 function showPuzzle(puzzle) {
   el("signed-by").textContent = puzzle.signed_by();
   el("level").textContent = puzzle.band() || "none given";
@@ -392,7 +394,10 @@ function openBytes(bytes) {
 
   let puzzle;
   try {
-    puzzle = page.open(bytes);
+    // `open_for_play`, not `open`. The second one checks the package; this one also
+    // asks whether the puzzle has been withdrawn. The page does not combine the two
+    // answers itself, because the page works nothing out.
+    puzzle = page.open_for_play(bytes);
   } catch (problem) {
     showRefusal(problem.message);
     return;
@@ -421,6 +426,65 @@ async function open(name) {
     return;
   }
   openBytes(bytes);
+}
+
+/** Stop a puzzle somebody is part-way through, because it has been withdrawn.
+ *
+ *  The project owner's decision, in as many words: stop it right away. The board closes
+ *  with a short note, and whatever was filled in is lost. The alternative — letting
+ *  somebody finish a puzzle that has no answer — is worse, and letting them finish one
+ *  with two answers means marking them wrong when they were right. */
+function closeTheBoard(why) {
+  game = null;
+  showing = null;
+  el("game").hidden = true;
+  el("solved").hidden = true;
+  showRefusal(why);
+}
+
+/** Fetch the signed list of withdrawn puzzles and act on it.
+ *
+ *  Everything that matters here happens inside `accept_withdrawals`: the signature, the
+ *  list's number, and deleting what it names. This function fetches bytes and shows a
+ *  sentence. */
+async function checkWithdrawn() {
+  if (pretendOffline) {
+    el("note").textContent =
+      "There is no signal, so the list of withdrawn puzzles cannot be fetched.";
+    return;
+  }
+  let bytes;
+  try {
+    const response = await fetch("store/withdrawals.gspk");
+    if (response.status === 404) {
+      el("note").textContent = "Nothing has been withdrawn.";
+      return;
+    }
+    if (!response.ok) throw new Error(`the server said ${response.status}`);
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (problem) {
+    el("note").textContent = `Could not fetch the list: ${problem.message}`;
+    return;
+  }
+
+  try {
+    el("note").textContent = page.accept_withdrawals(bytes).in_words();
+  } catch (problem) {
+    // Includes the case where this device already has a newer list, which is a refusal
+    // and not a fault.
+    el("note").textContent = problem.message;
+  }
+  refreshSaved();
+
+  // And the puzzle on the screen, which the list may have just named.
+  if (showing) {
+    try {
+      const why = page.why_withdrawn(showing.fingerprint);
+      if (why) closeTheBoard(why);
+    } catch (problem) {
+      el("note").textContent = problem.message;
+    }
+  }
 }
 
 async function main() {
@@ -495,6 +559,10 @@ async function main() {
     refreshSaved();
   });
 
+  el("check-withdrawn").addEventListener("click", () => {
+    void checkWithdrawn();
+  });
+
   el("offline").addEventListener("click", () => {
     pretendOffline = !pretendOffline;
     el("offline").setAttribute("aria-pressed", String(pretendOffline));
@@ -534,6 +602,9 @@ window.gatedspark = {
   save: () => el("save").click(),
   playSaved: () => el("play-saved").click(),
   toggleOffline: () => el("offline").click(),
+  checkWithdrawn,
+  withdrawalsSeen: () => page.withdrawals_seen(),
+  boardIsShowing: () => !el("game").hidden,
   fingerprint: () => el("fingerprint").textContent,
   refusal: () =>
     el("refused").hidden ? null : el("refused").textContent,

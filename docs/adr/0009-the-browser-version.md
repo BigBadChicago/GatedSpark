@@ -144,8 +144,9 @@ that will eventually be skipped.
 
 - **The browser download is 57 KB compressed** (155 KB uncompressed, release build, before
   `wasm-bindgen`'s own post-processing). Download size is not a constraint on this design, which
-  was worth knowing before deciding anything about splitting the module up. **62 KB as of
-  2026-10-23**, after the offline buffer and the page were added; see ADR 0011.
+  was worth knowing before deciding anything about splitting the module up. **62 KB** after the
+  offline buffer and the page were added (ADR 0011), and **71 KB as of 2026-10-23** after the
+  "do not play these" list (ADR 0012).
 - CI builds `gs-web` for the browser's target, so a change that breaks the browser build fails on
   the pull request rather than being discovered by hand.
 - The browser cannot re-verify a puzzle, and is not meant to. It checks the signature and the

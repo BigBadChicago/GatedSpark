@@ -26,6 +26,7 @@
 use wasm_bindgen_test::*;
 
 use gs_core::verification::{Outcome, Verifier};
+use gs_core::withdrawal::{seal_list, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::publish::publish;
@@ -77,9 +78,14 @@ impl Verifier for AgreesWithAUniquePuzzle {
 /// What a browser cannot do is ask a *solver*, which is why the one scripted here is
 /// scaffolding and why `gs-solver` is not allowed in this crate at all.
 fn a_signed_package(private_key: &[u8; 32], key_id: &str) -> Vec<u8> {
+    a_signed_package_at(private_key, key_id, 0)
+}
+
+/// The same, from a different level, so that two different puzzles can be had.
+fn a_signed_package_at(private_key: &[u8; 32], key_id: &str, band: usize) -> Vec<u8> {
     let candidate = (1u64..3_000)
-        .find_map(|seed| propose_in_band(&BANDS[0], seed, Budget::default()))
-        .expect("some seed in the first few thousand produces a gentle candidate");
+        .find_map(|seed| propose_in_band(&BANDS[band], seed, Budget::default()))
+        .expect("some seed in the first few thousand produces a candidate");
     publish(
         &candidate,
         &AgreesWithAUniquePuzzle {
@@ -505,4 +511,199 @@ fn saved_puzzles_do_not_disturb_anything_else_the_page_keeps() {
         Some("dark mode"),
         "and it is still there"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The "do not play these" list, in the storage a real browser actually has
+// ---------------------------------------------------------------------------
+//
+// `gs-offline`'s own tests prove the rules on a shelf in memory. These prove them where
+// they have to work: a withdrawal list signed with real Ed25519, read back through a
+// real SHA-256 digest, acting on packages in a browser's own `localStorage`.
+
+/// A signed "do not play these" list naming one puzzle.
+fn a_withdrawal(
+    serial: u64,
+    fingerprint: &str,
+    reason: Reason,
+    key: &[u8; 32],
+    key_id: &str,
+) -> Vec<u8> {
+    let mut id = [0u8; 32];
+    let text = fingerprint.as_bytes();
+    for (byte, pair) in id.iter_mut().zip(text.chunks(2)) {
+        let digit = |c: u8| (c as char).to_digit(16).expect("a fingerprint is hex") as u8;
+        *byte = digit(pair[0]) << 4 | digit(pair[1]);
+    }
+    let list = WithdrawalList {
+        serial,
+        withdrawn: vec![Withdrawn {
+            content_id: id,
+            reason,
+        }],
+    };
+    seal_list(&list, &Sha256, &Ed25519Signer::new(key_id, key)).expect("a short list seals")
+}
+
+/// How many packages the buffer is holding, counted in the browser's own storage.
+fn packages_in_storage() -> usize {
+    let storage = web_sys::window()
+        .expect("a browser window")
+        .local_storage()
+        .expect("storage is allowed")
+        .expect("storage exists");
+    let mut held = 0;
+    for i in 0..storage.length().expect("a length") {
+        if let Ok(Some(key)) = storage.key(i) {
+            if key.starts_with("gatedspark/ahead/") {
+                held += 1;
+            }
+        }
+    }
+    held
+}
+
+#[wasm_bindgen_test]
+fn a_withdrawn_puzzle_is_deleted_from_a_real_browsers_storage() {
+    forget_everything_saved();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.save_for_later(&package).expect("saved");
+    assert_eq!(packages_in_storage(), 1, "it must be there to be deleted");
+    assert_eq!(page.withdrawals_seen().expect("reads"), 0);
+
+    let list = a_withdrawal(
+        1,
+        &fingerprint,
+        Reason::MoreThanOneAnswer,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    );
+    let noticed = page.accept_withdrawals(&list).expect("accepted");
+
+    assert_eq!(noticed.serial(), 1);
+    assert_eq!(noticed.named(), 1);
+    assert_eq!(noticed.dropped(), 1);
+    assert_eq!(
+        packages_in_storage(),
+        0,
+        "the bytes must be gone from the browser's storage, not filtered on the way out"
+    );
+    assert_eq!(page.withdrawals_seen().expect("reads"), 1);
+}
+
+#[wasm_bindgen_test]
+fn a_withdrawn_puzzle_will_not_open_for_play_and_will_not_be_saved_again() {
+    forget_everything_saved();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.open(&package).expect("opens").fingerprint();
+    page.accept_withdrawals(&a_withdrawal(
+        1,
+        &fingerprint,
+        Reason::NoAnswer,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    ))
+    .expect("accepted");
+
+    // `open` is the package check and still passes: the package is perfectly good.
+    // That is the whole reason this mechanism exists.
+    assert!(page.open(&package).is_ok());
+    // `open_for_play` is the question a player's screen depends on.
+    assert!(page.open_for_play(&package).is_err());
+    assert!(page.save_for_later(&package).is_err());
+    assert_eq!(packages_in_storage(), 0);
+
+    let why = page
+        .why_withdrawn(&fingerprint)
+        .expect("reads")
+        .expect("it has been withdrawn");
+    assert!(why.contains("withdrawn"), "{why}");
+    assert!(why.contains("no answer"), "{why}");
+}
+
+#[wasm_bindgen_test]
+fn a_puzzle_nobody_withdrew_is_untouched_in_a_real_browser() {
+    // The anti-vacuity half. Everything above would pass for a page that refused
+    // every puzzle once it had seen any list at all.
+    forget_everything_saved();
+    let doomed = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let doomed_print = page.open(&doomed).expect("opens").fingerprint();
+    // A different puzzle: a different band gives different clues.
+    let other = a_signed_package_at(&TEST_ONLY_PRIVATE_KEY, KEY_ID, 1);
+    let other_print = page.open(&other).expect("opens").fingerprint();
+    assert_ne!(doomed_print, other_print);
+
+    page.save_for_later(&other).expect("saved");
+    page.accept_withdrawals(&a_withdrawal(
+        1,
+        &doomed_print,
+        Reason::Unsuitable,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    ))
+    .expect("accepted");
+
+    assert_eq!(packages_in_storage(), 1, "the other one must survive");
+    assert!(page.open_for_play(&other).is_ok());
+    assert_eq!(page.why_withdrawn(&other_print).expect("reads"), None);
+    assert_eq!(
+        page.next_saved().expect("still playable").fingerprint(),
+        other_print
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_list_from_a_stranger_is_ignored_in_a_browser_too() {
+    forget_everything_saved();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.save_for_later(&package).expect("saved");
+
+    let theirs = a_withdrawal(
+        1,
+        &fingerprint,
+        Reason::NoAnswer,
+        &SOMEBODY_ELSES_PRIVATE_KEY,
+        "somebody-elses-key",
+    );
+    assert!(
+        page.accept_withdrawals(&theirs).is_err(),
+        "anybody who could withdraw anything could delete every puzzle on every device"
+    );
+    assert_eq!(packages_in_storage(), 1, "nothing was deleted");
+    assert_eq!(page.withdrawals_seen().expect("reads"), 0);
+    assert!(page.open_for_play(&package).is_ok());
+}
+
+#[wasm_bindgen_test]
+fn an_older_list_replayed_to_a_browser_cannot_un_withdraw_a_puzzle() {
+    forget_everything_saved();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.open(&package).expect("opens").fingerprint();
+
+    let newer = a_withdrawal(
+        9,
+        &fingerprint,
+        Reason::NoAnswer,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    );
+    // Genuine, correctly signed, and older: it names the same puzzle under a reason
+    // that no longer applies, and accepting it would be going backwards.
+    let older = a_withdrawal(
+        2,
+        &fingerprint,
+        Reason::Mistake,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    );
+
+    page.accept_withdrawals(&newer).expect("accepted");
+    assert!(page.accept_withdrawals(&older).is_err());
+    assert_eq!(page.withdrawals_seen().expect("reads"), 9);
+    assert!(page.open_for_play(&package).is_err(), "still withdrawn");
 }

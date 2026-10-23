@@ -662,11 +662,15 @@ fn outcome_of(tag: u8) -> Result<Outcome, OpenError> {
     }
 }
 
-fn put_str(out: &mut Vec<u8>, s: &str, field: &'static str) -> Result<(), EncodeError> {
+pub(crate) fn put_str(out: &mut Vec<u8>, s: &str, field: &'static str) -> Result<(), EncodeError> {
     put_bytes16(out, s.as_bytes(), field)
 }
 
-fn put_bytes16(out: &mut Vec<u8>, b: &[u8], field: &'static str) -> Result<(), EncodeError> {
+pub(crate) fn put_bytes16(
+    out: &mut Vec<u8>,
+    b: &[u8],
+    field: &'static str,
+) -> Result<(), EncodeError> {
     let len = u16::try_from(b.len()).map_err(|_| EncodeError::TooLong {
         field,
         len: b.len(),
@@ -676,7 +680,11 @@ fn put_bytes16(out: &mut Vec<u8>, b: &[u8], field: &'static str) -> Result<(), E
     Ok(())
 }
 
-fn put_bytes32(out: &mut Vec<u8>, b: &[u8], field: &'static str) -> Result<(), EncodeError> {
+pub(crate) fn put_bytes32(
+    out: &mut Vec<u8>,
+    b: &[u8],
+    field: &'static str,
+) -> Result<(), EncodeError> {
     let len = u32::try_from(b.len()).map_err(|_| EncodeError::TooLong {
         field,
         len: b.len(),
@@ -686,7 +694,7 @@ fn put_bytes32(out: &mut Vec<u8>, b: &[u8], field: &'static str) -> Result<(), E
     Ok(())
 }
 
-fn count16(n: usize, field: &'static str) -> Result<u16, EncodeError> {
+pub(crate) fn count16(n: usize, field: &'static str) -> Result<u16, EncodeError> {
     u16::try_from(n).map_err(|_| EncodeError::TooLong { field, len: n })
 }
 
@@ -694,21 +702,21 @@ fn count16(n: usize, field: &'static str) -> Result<u16, EncodeError> {
 ///
 /// Every read is length-checked and returns [`OpenError::Truncated`] naming the field
 /// it was reading, so a short file says where it stopped rather than panicking.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Reader { bytes, at: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.at)
     }
 
-    fn take(&mut self, n: usize, field: &'static str) -> Result<&'a [u8], OpenError> {
+    pub(crate) fn take(&mut self, n: usize, field: &'static str) -> Result<&'a [u8], OpenError> {
         let end = self
             .at
             .checked_add(n)
@@ -721,36 +729,36 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
-    fn u8(&mut self, field: &'static str) -> Result<u8, OpenError> {
+    pub(crate) fn u8(&mut self, field: &'static str) -> Result<u8, OpenError> {
         Ok(self.take(1, field)?[0])
     }
 
-    fn u16(&mut self, field: &'static str) -> Result<u16, OpenError> {
+    pub(crate) fn u16(&mut self, field: &'static str) -> Result<u16, OpenError> {
         let b: [u8; 2] = self.take(2, field)?.try_into().expect("two bytes");
         Ok(u16::from_le_bytes(b))
     }
 
-    fn u32(&mut self, field: &'static str) -> Result<u32, OpenError> {
+    pub(crate) fn u32(&mut self, field: &'static str) -> Result<u32, OpenError> {
         let b: [u8; 4] = self.take(4, field)?.try_into().expect("four bytes");
         Ok(u32::from_le_bytes(b))
     }
 
-    fn u64(&mut self, field: &'static str) -> Result<u64, OpenError> {
+    pub(crate) fn u64(&mut self, field: &'static str) -> Result<u64, OpenError> {
         let b: [u8; 8] = self.take(8, field)?.try_into().expect("eight bytes");
         Ok(u64::from_le_bytes(b))
     }
 
-    fn bytes16(&mut self, field: &'static str) -> Result<&'a [u8], OpenError> {
+    pub(crate) fn bytes16(&mut self, field: &'static str) -> Result<&'a [u8], OpenError> {
         let len = usize::from(self.u16(field)?);
         self.take(len, field)
     }
 
-    fn bytes32(&mut self, field: &'static str) -> Result<&'a [u8], OpenError> {
+    pub(crate) fn bytes32(&mut self, field: &'static str) -> Result<&'a [u8], OpenError> {
         let len = usize::try_from(self.u32(field)?).map_err(|_| OpenError::Truncated { field })?;
         self.take(len, field)
     }
 
-    fn string(&mut self, field: &'static str) -> Result<String, OpenError> {
+    pub(crate) fn string(&mut self, field: &'static str) -> Result<String, OpenError> {
         let b = self.bytes16(field)?;
         core::str::from_utf8(b)
             .map(str::to_owned)

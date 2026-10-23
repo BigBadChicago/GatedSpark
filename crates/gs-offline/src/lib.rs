@@ -22,19 +22,23 @@
 //! against a key. Which family a puzzle belongs to is the page's question: a buffer that
 //! knew about Nonogram would have to learn about every family after it.
 //!
-//! # What is deliberately missing
+//! # Withdrawing a puzzle that is already on the device
 //!
-//! **Withdrawing a puzzle already downloaded.** If a bad puzzle ships, a device holding
-//! it needs telling to drop it. [`buffer::Buffer::discard_spoiled`] throws away anything
-//! that fails its *own* checks, which covers a damaged or tampered file, but it cannot
-//! cover a puzzle that is perfectly signed and simply should not be played. That needs
-//! an agreed way of publishing "do not play these", and it is the last hole in the
-//! offline story. ADR 0011 records it as such rather than leaving it to be noticed.
+//! [`buffer::Buffer::discard_spoiled`] throws away anything that fails its *own* checks,
+//! which covers a damaged or tampered file. It cannot cover a puzzle that is perfectly
+//! signed and simply should not be played — one that turned out to have no answer, or
+//! more than one. That is [`notices`], the device's side of the "do not play these"
+//! list. ADR 0012 records the design; the file itself is [`gs_core::withdrawal`].
+//!
+//! The one thing still true after all of it: a device that never connects never hears
+//! about a withdrawal. [`notices`] says why no design fixes that.
 
 pub mod buffer;
+pub mod notices;
 pub mod order;
 pub mod shelf;
 
 pub use buffer::{Buffer, Delivered, NotKept, NothingToPlay, Stock, HOW_MANY_AHEAD};
+pub use notices::{NotNoticed, Noticed, Notices, Standing};
 pub use order::{Bookmark, Order};
 pub use shelf::{Shelf, ShelfError};

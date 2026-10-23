@@ -18,9 +18,15 @@
 //! network would be. The failures are reported rather than swallowed: a browser that
 //! will not store anything is a different fact from a device with no puzzles left, and
 //! a player can act on them differently.
+//!
+//! # Withdrawn puzzles
+//!
+//! Every call below passes the device's withdrawal list to the buffer, and it is read
+//! fresh each time rather than cached. A cached copy is a copy that can be stale at the
+//! one moment it matters. See [`gs_offline::notices`].
 
 use gs_offline::shelf::{Shelf, ShelfError};
-use gs_offline::{Buffer, Stock};
+use gs_offline::{Buffer, Notices, Standing, Stock};
 use wasm_bindgen::prelude::*;
 
 use crate::browser::Page;
@@ -201,8 +207,9 @@ impl Page {
     /// signal.
     pub fn save_for_later(&self, package: &[u8]) -> Result<String, JsError> {
         let mut shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
+        let standing = self.standing(&shelf)?;
         Buffer::new()
-            .keep(&mut shelf, package, self.digest(), self.keys())
+            .keep(&mut shelf, package, self.digest(), self.keys(), &standing)
             .map(|id| id.to_hex())
             .map_err(|why| JsError::new(&why.to_string()))
     }
@@ -215,7 +222,7 @@ impl Page {
     pub fn next_saved(&self) -> Result<crate::browser::Puzzle, JsError> {
         let shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
         let delivered = Buffer::new()
-            .next(&shelf, self.digest(), self.keys())
+            .next(&shelf, self.digest(), self.keys(), &self.standing(&shelf)?)
             .map_err(|why| JsError::new(&why.to_string()))?;
         // Opened again here, by the same path any other puzzle takes. The buffer checked
         // the signature; this is the page checking the family and the rules version, and
@@ -237,7 +244,7 @@ impl Page {
     pub fn saved(&self) -> Result<Saved, JsError> {
         let shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
         Buffer::new()
-            .stock(&shelf, self.digest(), self.keys())
+            .stock(&shelf, self.digest(), self.keys(), &self.standing(&shelf)?)
             .map(Saved::from)
             .map_err(|why| JsError::new(&why.to_string()))
     }
@@ -249,8 +256,129 @@ impl Page {
     /// signal would have nothing left.
     pub fn discard_unusable(&self) -> Result<usize, JsError> {
         let mut shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
+        let standing = self.standing(&shelf)?;
         Buffer::new()
-            .discard_spoiled(&mut shelf, self.digest(), self.keys())
+            .discard_spoiled(&mut shelf, self.digest(), self.keys(), &standing)
+            .map_err(|why| JsError::new(&why.to_string()))
+    }
+}
+
+/// What taking a "do not play these" list did to this device.
+#[wasm_bindgen]
+pub struct Withdrawals {
+    serial: u64,
+    named: usize,
+    dropped: usize,
+}
+
+#[wasm_bindgen]
+impl Withdrawals {
+    /// The list's number. This device now refuses any list numbered at or below it.
+    #[must_use]
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// How many puzzles the list names.
+    #[must_use]
+    pub fn named(&self) -> usize {
+        self.named
+    }
+
+    /// How many saved puzzles were deleted because of it.
+    #[must_use]
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// The same thing as a sentence, for showing to a person.
+    #[must_use]
+    pub fn in_words(&self) -> String {
+        match self.dropped {
+            0 => "Checked for withdrawn puzzles. None of the puzzles saved on this \
+                  device has been withdrawn."
+                .to_owned(),
+            1 => "1 puzzle saved on this device had been withdrawn, so it has been \
+                  deleted."
+                .to_owned(),
+            n => format!(
+                "{n} puzzles saved on this device had been withdrawn, so they have been \
+                 deleted."
+            ),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl Page {
+    /// Take a signed "do not play these" list.
+    ///
+    /// Checked against the same trusted keys a puzzle is. Refused if it is not newer
+    /// than the one this device already has, which is what stops an old list being
+    /// served again to make a withdrawal disappear. Accepting it deletes every saved
+    /// puzzle it names, there and then.
+    pub fn accept_withdrawals(&self, list: &[u8]) -> Result<Withdrawals, JsError> {
+        let mut shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
+        let noticed = Notices::new()
+            .accept(&mut shelf, list, self.digest(), self.keys())
+            .map_err(|why| JsError::new(&why.to_string()))?;
+        Ok(Withdrawals {
+            serial: noticed.serial,
+            named: noticed.named,
+            dropped: noticed.dropped,
+        })
+    }
+
+    /// Open a package for a player, refusing it if it has been withdrawn.
+    ///
+    /// **This is the call a page plays a puzzle through.** [`Page::open`] is the package
+    /// check on its own and knows nothing about withdrawals, because it has to work
+    /// where there is no storage to read a list from. This one is the whole question a
+    /// player's screen depends on, and the page asks it rather than working anything out
+    /// for itself.
+    pub fn open_for_play(&self, bytes: &[u8]) -> Result<crate::browser::Puzzle, JsError> {
+        let puzzle = self.open(bytes)?;
+        if let Some(why) = self.why_withdrawn(&puzzle.fingerprint())? {
+            return Err(JsError::new(&why));
+        }
+        Ok(puzzle)
+    }
+
+    /// Why this puzzle must not be played, if it must not be.
+    ///
+    /// Takes the fingerprint the page already has, and answers with a sentence or with
+    /// nothing. The page calls it again after taking a list, which is how a puzzle
+    /// somebody is halfway through gets stopped.
+    pub fn why_withdrawn(&self, fingerprint: &str) -> Result<Option<String>, JsError> {
+        let shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
+        let standing = self.standing(&shelf)?;
+        // The fingerprint is hex, and a `ContentId` may only be made by digesting, so
+        // the comparison is made on the text rather than by building an id out of a
+        // string somebody handed us.
+        Ok(standing
+            .named_in_hex()
+            .into_iter()
+            .find(|(hex, _)| hex == fingerprint)
+            .map(|(_, reason)| format!("This puzzle has been withdrawn, because {reason}.")))
+    }
+
+    /// The highest list number this device has accepted, or zero if it has seen none.
+    ///
+    /// For a page to send when it asks for a newer one.
+    pub fn withdrawals_seen(&self) -> Result<u64, JsError> {
+        let shelf = LocalStorage::open().map_err(|why| JsError::new(&why.to_string()))?;
+        Ok(self.standing(&shelf)?.serial)
+    }
+}
+
+impl Page {
+    /// The withdrawals this device is going by, read back through their signature.
+    ///
+    /// Read fresh on every call that needs it. A cached copy is a copy that can be stale
+    /// at the one moment it matters.
+    fn standing(&self, shelf: &LocalStorage) -> Result<Standing, JsError> {
+        Notices::new()
+            .standing(shelf, self.digest(), self.keys())
             .map_err(|why| JsError::new(&why.to_string()))
     }
 }
