@@ -230,6 +230,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gs-slitherlink"
+version = "0.1.0"
+dependencies = [
+ "gs-core",
+ "gs-nonogram",
+]
+
+[[package]]
 name = "gs-solver"
 version = "0.0.1"
 dependencies = [
