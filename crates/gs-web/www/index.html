@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GatedSpark</title>
+<!-- Drawn here rather than fetched. A browser asks every site for /favicon.ico whether
+     or not the page mentions one, and a page that mentions none collects a 404 on every
+     visit: harmless, but it is noise in exactly the place real faults show up. Inline
+     also means it works with no signal, like everything else here. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231f6f5c'/%3E%3Cg fill='%23fbfbf9'%3E%3Crect x='3' y='3' width='4' height='4'/%3E%3Crect x='9' y='9' width='4' height='4'/%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
     --ink: #17171a;
@@ -159,6 +164,28 @@
   }
   .note { color: var(--muted); font-size: .85rem; min-height: 1.5em; margin: .25rem 0 0; }
 
+  /* ---- how to play --------------------------------------------------- */
+  /* A fold rather than a wall of text. It starts open, because somebody meeting the
+     game for the first time should not have to go looking for the rules, and it
+     remembers being closed, because somebody who already knows them should not have to
+     close it every day. */
+  .rules {
+    margin: 0 0 1rem;
+    border: 1px solid var(--line);
+    border-radius: .5rem;
+    /* No fill: the border alone separates it, and a second panel colour beside the
+       saved panel would look like two different kinds of thing. */
+  }
+  .rules > summary {
+    cursor: pointer;
+    padding: .6rem .9rem;
+    font-weight: 600;
+    list-style-position: inside;
+  }
+  .rules > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .rules ul { margin: 0; padding: 0 .9rem .9rem 2rem; }
+  .rules li { margin: .35rem 0; font-size: .9rem; line-height: 1.45; }
+
   /* ---- the loop game ------------------------------------------------ */
   /* Drawn as one picture rather than a table of squares, because what a player marks
      here is the lines between the dots, and a table has no place to put those. */
@@ -223,6 +250,11 @@
 
   <div id="game" hidden>
     <p id="solved" class="solved" hidden>Solved. Every clue matches.</p>
+
+    <details class="rules" id="rules">
+      <summary id="rules-title">How to play</summary>
+      <ul id="rules-list"></ul>
+    </details>
 
     <div class="board-scroll">
       <table class="board" id="board"></table>
@@ -298,6 +330,65 @@ const HOW_TO = {
   slitherlink:
     "Tap between two dots to draw a line, again to rule it out, again to clear it. Ruling lines out is just for you: the puzzle is done when the lines make one loop and every number is met.",
 };
+
+/** The rules of each game, in the player's words rather than the solver's.
+ *
+ *  These are the page's own text on purpose. The core knows whether a board is
+ *  finished; it has nothing to say about what a player is trying to do, and a rule
+ *  written twice is a rule that will disagree with itself one day. There is exactly one
+ *  copy of each of these sentences, here.
+ *
+ *  The last line of each list is the controls, which is also what HOW_TO says in the
+ *  status line. That repetition is deliberate: the status line is wiped by the next
+ *  thing that happens, so it cannot be the only place the controls are written. */
+const RULES = {
+  nonogram: [
+    "Fill in squares to uncover a hidden picture.",
+    "The numbers above a column, or beside a row, say how many squares are filled in that line, in order.",
+    "So 3 1 means three filled squares together, then at least one blank, then one more filled square.",
+    "A line marked 0 has no filled squares in it at all.",
+    "You only have to get the filled squares right. Crossing out the blanks is a note to yourself, and nothing checks it.",
+    "Tap a square once to fill it, again to cross it out, again to clear it.",
+  ],
+  slitherlink: [
+    "Draw one single loop along the lines between the dots.",
+    "The loop never crosses itself, never branches, and never splits into two separate loops. When you are done there is exactly one loop and nothing else drawn.",
+    "A number in a square says how many of that square's four sides the loop uses. A 3 means three of its sides, a 0 means none of them.",
+    "A square with no number in it can have any number of its sides used.",
+    "Ruling a line out is a note to yourself, and nothing checks it.",
+    "Tap between two dots to draw a line, again to rule it out, again to clear it.",
+  ],
+};
+
+/** Whether the player has folded the rules away. Kept per device, and only ever a
+ *  convenience: if browser storage is unavailable the fold simply opens each time,
+ *  which is the safe way round. */
+const RULES_CLOSED = "gatedspark.rules-closed";
+
+function showRules(family) {
+  const lines = RULES[family];
+  const fold = el("rules");
+  if (!lines) {
+    fold.hidden = true;
+    return;
+  }
+  fold.hidden = false;
+  el("rules-title").textContent = `How to play ${NAMES[family] ?? family}`;
+  el("rules-list").replaceChildren(
+    ...lines.map((line) => {
+      const item = document.createElement("li");
+      item.textContent = line;
+      return item;
+    })
+  );
+  let closed = false;
+  try {
+    closed = window.localStorage.getItem(RULES_CLOSED) === "yes";
+  } catch {
+    closed = false;
+  }
+  fold.open = !closed;
+}
 
 /** What each game is called, for the picker. One line per game, like HOW_TO above. */
 const NAMES = {
@@ -568,6 +659,7 @@ function showPuzzle(puzzle) {
     drawBoard();
   }
   refresh();
+  showRules(game.family());
   el("note").textContent = HOW_TO[game.family()] ?? "";
   el("game").hidden = false;
 }
@@ -829,6 +921,15 @@ async function main() {
     event.preventDefault();
     tapLine(edge);
   });
+  // Remembering the fold is a convenience and nothing more, so a browser that refuses
+  // to store it just means the rules open again next time.
+  el("rules").addEventListener("toggle", () => {
+    try {
+      window.localStorage.setItem(RULES_CLOSED, el("rules").open ? "no" : "yes");
+    } catch {
+      /* nothing to do: the fold still works for this visit. */
+    }
+  });
   el("undo").addEventListener("click", () => {
     el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
     refresh();
@@ -950,6 +1051,9 @@ window.gatedspark = {
   checkWithdrawn,
   withdrawalsSeen: () => page.withdrawals_seen(),
   boardIsShowing: () => !el("game").hidden,
+  rulesTitle: () => el("rules-title").textContent,
+  rulesShown: () => Array.from(el("rules-list").children).map((li) => li.textContent),
+  rulesOpen: () => el("rules").open,
   fingerprint: () => el("fingerprint").textContent,
   refusal: () =>
     el("refused").hidden ? null : el("refused").textContent,
