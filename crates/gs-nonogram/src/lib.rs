@@ -27,6 +27,7 @@
 pub mod clues;
 pub mod difficulty;
 pub mod generate;
+pub mod hint;
 pub mod line;
 pub mod publish;
 /// The workspace's deterministic generator, which lives in the core.

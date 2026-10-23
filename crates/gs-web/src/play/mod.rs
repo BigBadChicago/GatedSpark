@@ -93,6 +93,69 @@ pub(crate) fn why(e: TimelineError) -> NoChange {
     }
 }
 
+/// How many hints a player gets on one puzzle.
+///
+/// Three, which is what the project owner asked for. It lives here rather than in
+/// either game because it is about the help on offer, not about the rules: both games
+/// get the same allowance, and neither game's crate has any say in it.
+///
+/// The allowance belongs to a session, so it starts again when a puzzle is opened
+/// again. That is deliberate: a hint is help, not a score, and there is nothing here
+/// worth defending with bookkeeping that follows a player around.
+///
+/// Two things are deliberately not charged for: a hint that could say nothing, and the
+/// same hint again. Asking twice without having marked anything gets the same sentence
+/// back for nothing, because nothing has changed and there is nothing new to say.
+pub const HINTS_PER_PUZZLE: u8 = 3;
+
+/// Where a hint is pointing, in the one shape a page can draw whichever game it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointsAt {
+    /// One square of a Nonogram, counting from 0 at the top left.
+    Square { row: u16, column: u16 },
+    /// One line of a Slitherlink: which way it runs, and the dot it starts from.
+    Line { across: bool, column: u16, row: u16 },
+    /// Nowhere in particular. Said of a hint about a whole row, or a whole square's
+    /// number, where highlighting one place would point at the wrong thing.
+    Nowhere,
+}
+
+/// A hint, ready to show.
+///
+/// The sentence comes from the game's own crate, where the reasoning is. Nothing here
+/// writes it, for the same reason nothing here decides whether a board is finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Advice {
+    /// What to tell the player.
+    pub says: String,
+    /// Where to point, if anywhere.
+    pub points_at: PointsAt,
+    /// How many hints are left on this puzzle after this one.
+    pub hints_left: u8,
+}
+
+/// Why there is no hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoHint {
+    /// The allowance for this puzzle is spent.
+    NoneLeft,
+    /// Nothing could be worked out from here. Not charged against the allowance: a
+    /// player should not pay for an answer that never came.
+    NothingToSay,
+}
+
+impl std::fmt::Display for NoHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let said = match self {
+            NoHint::NoneLeft => "That is all three hints for this puzzle.",
+            NoHint::NothingToSay => "There is nothing this device can work out from here.",
+        };
+        f.write_str(said)
+    }
+}
+
+impl std::error::Error for NoHint {}
+
 /// One person playing one puzzle, of either game.
 pub enum Session {
     Nonogram(nonogram::Session),
@@ -143,6 +206,31 @@ impl Session {
         match self {
             Session::Slitherlink(game) => Some(game),
             Session::Nonogram(_) => None,
+        }
+    }
+
+    /// The next thing the player could work out, and what it costs them.
+    ///
+    /// Worked out on the device from the clues, by the game's own reasoning. No answer
+    /// is stored or fetched, which is why this works with no signal and why nothing
+    /// published alongside a puzzle has to be kept secret.
+    ///
+    /// **It makes no move.** The puzzle, its clues and its one answer are the same
+    /// whether a hint was asked for or not, which is what keeps this help rather than a
+    /// change to the game.
+    pub fn hint(&mut self) -> Result<Advice, NoHint> {
+        match self {
+            Session::Nonogram(game) => game.hint(),
+            Session::Slitherlink(game) => game.hint(),
+        }
+    }
+
+    /// How many hints are left on this puzzle.
+    #[must_use]
+    pub fn hints_left(&self) -> u8 {
+        match self {
+            Session::Nonogram(game) => game.hints_left(),
+            Session::Slitherlink(game) => game.hints_left(),
         }
     }
 

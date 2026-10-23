@@ -361,6 +361,66 @@ fn taking_back_a_move_works_through_the_browser() {
     assert_eq!(game.moves_made(), 0);
 }
 
+#[wasm_bindgen_test]
+fn three_hints_arrive_in_a_browser_and_the_fourth_is_refused() {
+    // Hints are worked out inside the browser from the clues, with nothing fetched. The
+    // part only a browser can show is that the reasoning really runs in a browser's
+    // WebAssembly engine, and that a refusal comes back as something a page can catch
+    // and show rather than as a crash.
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    assert_eq!(game.hints_per_puzzle(), 3);
+    assert_eq!(game.hints_left(), 3);
+
+    for spent in 1..=3u32 {
+        let hint = game
+            .hint()
+            .expect("a hint on a board with squares undecided");
+        let says = hint.says();
+        assert!(!says.is_empty(), "hint {spent} said nothing");
+        assert!(
+            says.ends_with('.'),
+            "hint {spent} is not a sentence: {says}"
+        );
+        assert_eq!(hint.hints_left(), 3 - spent);
+        assert_eq!(game.hints_left(), 3 - spent);
+        assert_eq!(
+            hint.points_at(),
+            "square",
+            "a Nonogram hint should point at a square"
+        );
+        assert!(hint.row() >= 0 && hint.column() >= 0);
+        assert_eq!(hint.side(), -1, "a square is not a line");
+
+        // The same hint again, which is free: nothing has been marked since.
+        let again = game.hint().expect("the same hint again");
+        assert_eq!(again.says(), says, "it said something else");
+        assert_eq!(game.hints_left(), 3 - spent, "a repeat was charged for");
+
+        // Then do what it says, so the next hint is a new one.
+        let mark = if says.contains("has to be filled") {
+            Square::Filled
+        } else {
+            Square::Empty
+        };
+        let row = u16::try_from(hint.row()).expect("a row on the board");
+        let column = u16::try_from(hint.column()).expect("a column on the board");
+        assert!(
+            game.mark(row, column, mark),
+            "hint {spent} pointed at a square that cannot be marked"
+        );
+    }
+
+    assert!(game.hint().is_err(), "a fourth hint was given away");
+    assert_eq!(game.hints_left(), 0);
+    // Three marks, from doing what the three hints said. Asking itself cost nothing.
+    assert_eq!(game.moves_made(), 3);
+}
+
 // ---------------------------------------------------------------------------
 // The offline buffer, in the storage a real browser actually has
 // ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@
 pub mod board;
 pub mod clues;
 pub mod generate;
+pub mod hint;
 pub mod loops;
 /// The workspace's deterministic generator, which lives in the core.
 ///
