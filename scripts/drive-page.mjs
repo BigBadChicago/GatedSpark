@@ -177,6 +177,67 @@ if (afterTaps.untouched !== 2) await fail('an untapped square was not left undec
 if (afterTaps.solved) await fail('six taps cannot solve a puzzle', 'tap');
 await page.screenshot({ path: OUT + '/part-played.png', fullPage: true });
 
+// Playing with the keyboard alone, and listening rather than looking.
+//
+// This is the half of accessibility a screenshot cannot show and the test in
+// crates/gs-web/tests/usable_without_a_mouse.rs cannot reach: that one proves the page
+// still *says* the right things, this one proves they still *work*. The plan put
+// accessibility on the list of things that must not be cut, and it was cut once
+// already, so it is checked here with the real keyboard on the real page.
+//
+// No mouse is used below. Focus is moved with Tab and the square is pressed with Enter.
+// A square the taps above did not reach, so "blank" below means blank rather than
+// "whatever the last test left here". Worked out from the board, like `corner` is.
+const beforeKeys = await page.evaluate((far) => {
+  const first = document.querySelector(`td.square[data-row="${far[0]}"][data-column="0"]`);
+  first.focus();
+  return { name: first.getAttribute('aria-label'), focused: document.activeElement === first };
+}, corner);
+if (!beforeKeys.focused) await fail('a square cannot take focus at all', 'keyboard');
+if (!/blank/.test(beforeKeys.name)) {
+  await fail('an untouched square does not say it is blank: ' + beforeKeys.name, 'keyboard');
+}
+
+// Tab must reach the next square, not stop at the first. A board where only one cell
+// is in the tab order is a board that cannot be played through.
+await page.keyboard.press('Tab');
+const moved = await page.evaluate(() => ({
+  onASquare: document.activeElement?.classList.contains('square') ?? false,
+  name: document.activeElement?.getAttribute('aria-label') ?? null,
+  mark: Number(document.activeElement?.dataset.mark),
+}));
+if (!moved.onASquare) {
+  await fail('Tab does not move from one square to the next: ' + JSON.stringify(moved), 'keyboard');
+}
+if (moved.name === beforeKeys.name) await fail('Tab landed back on the same square', 'keyboard');
+
+// Enter must mark it, and the square must then say so out loud. A square that changes
+// colour and keeps its old name has told somebody listening nothing at all.
+await page.keyboard.press('Enter');
+const afterKeys = await page.evaluate(() => {
+  const here = document.activeElement;
+  return {
+    name: here.getAttribute('aria-label'),
+    mark: Number(here.dataset.mark),
+  };
+});
+console.log('after a key press ' + JSON.stringify(afterKeys));
+if (afterKeys.mark === moved.mark) {
+  await fail('Enter did not change the square the keyboard was on', 'keyboard');
+}
+if (!/filled/.test(afterKeys.name)) {
+  await fail('a filled square still calls itself something else: ' + afterKeys.name, 'keyboard');
+}
+
+// And the name must follow an undo, which changes a square nobody touched.
+await page.evaluate(() => window.gatedspark.undo());
+const afterUndoName = await page.evaluate(() =>
+  document.activeElement.getAttribute('aria-label')
+);
+if (!/blank/.test(afterUndoName)) {
+  await fail('after undo the square still calls itself filled: ' + afterUndoName, 'keyboard');
+}
+
 // Undo and redo, checked by looking at the square rather than at the button.
 await page.evaluate(() => window.gatedspark.undo());
 if (await page.evaluate(() => window.gatedspark.boardAt(1, 1)) !== 0) await fail('undo did not put the square back', 'undo');
@@ -663,6 +724,38 @@ const rules = await page.evaluate(() => ({
   open: window.gatedspark.rulesOpen(),
 }));
 console.log('rules on screen ' + JSON.stringify(rules));
+
+// The loop game, with the keyboard and with the ears. Same two questions as the
+// picture game: can a line be reached and pressed without a mouse, and does it say
+// what it has become.
+if (afterSwitch.family === 'slitherlink') {
+  const beforeLine = await page.evaluate(() => {
+    const first = document.querySelector('g.edge');
+    first.focus();
+    return {
+      name: first.getAttribute('aria-label'),
+      drawn: Number(first.dataset.drawn),
+      focused: document.activeElement === first,
+    };
+  });
+  if (!beforeLine.focused) await fail('a line cannot take focus at all', 'keyboard-loop');
+  if (!/not decided/.test(beforeLine.name)) {
+    await fail('an untouched line does not say it is undecided: ' + beforeLine.name, 'keyboard-loop');
+  }
+  await page.keyboard.press('Enter');
+  const afterLine = await page.evaluate(() => ({
+    name: document.activeElement.getAttribute('aria-label'),
+    drawn: Number(document.activeElement.dataset.drawn),
+  }));
+  console.log('after a key press on a line ' + JSON.stringify(afterLine));
+  if (afterLine.drawn === beforeLine.drawn) {
+    await fail('Enter did not change the line the keyboard was on', 'keyboard-loop');
+  }
+  if (!/drawn/.test(afterLine.name)) {
+    await fail('a drawn line still calls itself undecided: ' + afterLine.name, 'keyboard-loop');
+  }
+  await page.evaluate(() => window.gatedspark.undo());
+}
 if (!rules.lines.length) await fail('the game is showing no rules at all', 'rules');
 if (!rules.open) await fail('the rules start folded away, so a new player never sees them', 'rules');
 const saysLoop = rules.lines.join(' ').includes('loop');
