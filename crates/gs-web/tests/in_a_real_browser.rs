@@ -30,7 +30,7 @@ use gs_crypto::{Ed25519Signer, Sha256};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::publish::publish;
 use gs_nonogram::solve::Budget;
-use gs_web::browser::Page;
+use gs_web::browser::{Page, Square};
 
 // Not in Node, in a browser. The distinction matters: Node has a filesystem and
 // a process model, and a test passing there would say nothing about the place this
@@ -187,4 +187,134 @@ fn nothing_that_is_not_a_package_opens_in_a_browser() {
     assert!(page.open(b"").is_err());
     assert!(page.open(b"<!doctype html>").is_err());
     assert!(page.open(&[0u8; 512]).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Playing, in a browser
+// ---------------------------------------------------------------------------
+
+/// The answer to a puzzle, from the engine's own line solver.
+fn the_answer(clues: &gs_nonogram::clues::Clues) -> Vec<Square> {
+    let rules = gs_nonogram::rules::Nonogram::new(clues.clone());
+    let state = gs_nonogram::solve::solve(&rules, Budget::default())
+        .witness
+        .expect("a uniquely solvable puzzle has an answer");
+    (0..clues.dims.cell_count())
+        .map(|i| {
+            let cell = state
+                .get(u32::try_from(i).expect("fits"))
+                .expect("on the board");
+            match gs_nonogram::rules::mark_of(cell) {
+                gs_nonogram::line::Mark::Filled => Square::Filled,
+                gs_nonogram::line::Mark::Empty => Square::Empty,
+                gs_nonogram::line::Mark::Unknown => Square::Unknown,
+            }
+        })
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn a_puzzle_can_be_played_and_solved_in_a_browser() {
+    // The end of the line this whole slice was built along: generate, verify, sign,
+    // store, serve, open, and now solve — the last step inside a real browser.
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+    let clues = {
+        // The clues, read back out of the signed package the same way the page does.
+        let keys = {
+            let mut k = gs_crypto::TrustedKeys::none();
+            k.trust(
+                KEY_ID,
+                &Ed25519Signer::new(KEY_ID, &TEST_ONLY_PRIVATE_KEY).public_key(),
+            )
+            .expect("valid");
+            k
+        };
+        gs_web::load(&package, &Sha256, &keys).expect("loads").clues
+    };
+    let answer = the_answer(&clues);
+    let width = puzzle.width();
+
+    let mut game = puzzle.play();
+    assert!(!game.is_solved(), "a new game is not a solved game");
+    assert_eq!(game.moves_made(), 0);
+    assert_eq!(
+        game.board().len(),
+        usize::from(game.width()) * usize::from(game.height()),
+        "the board comes back one byte per square"
+    );
+    assert!(
+        game.board().iter().all(|&b| b == Square::Unknown as u8),
+        "every square starts undecided"
+    );
+
+    // Play the answer, by row and column as a page would.
+    for (i, &square) in answer.iter().enumerate() {
+        let row = u16::try_from(i / usize::from(width)).expect("fits");
+        let column = u16::try_from(i % usize::from(width)).expect("fits");
+        game.mark(row, column, square);
+    }
+
+    assert!(
+        game.is_solved(),
+        "playing the puzzle's own answer must solve it, in a browser too"
+    );
+    // 16 characters, not 64: a board fingerprint is the engine's 64-bit state hash, not
+    // the content fingerprint, which is SHA-256.
+    assert_eq!(game.board_fingerprint().len(), 16);
+
+    // And the cached-answer check, which is where a page that decided for itself would
+    // show up.
+    assert!(game.undo(), "there are moves to undo");
+    assert!(!game.is_solved(), "undoing the last move un-solves it");
+    assert!(game.redo(), "and redo puts it back");
+    assert!(game.is_solved());
+}
+
+#[wasm_bindgen_test]
+fn a_tap_outside_the_board_does_nothing_in_a_browser() {
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+    let (width, height) = (puzzle.width(), puzzle.height());
+    let mut game = puzzle.play();
+
+    assert!(
+        !game.mark(0, width, Square::Filled),
+        "one past the last column"
+    );
+    assert!(
+        !game.mark(height, 0, Square::Filled),
+        "one past the last row"
+    );
+    assert_eq!(
+        game.moves_made(),
+        0,
+        "no square anywhere on the board was marked"
+    );
+    assert!(
+        game.mark_and_say(0, width, Square::Filled)
+            .contains("no such square"),
+        "and a page asking why gets words it can show"
+    );
+}
+
+#[wasm_bindgen_test]
+fn taking_back_a_move_works_through_the_browser() {
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    assert!(!game.undo(), "nothing to undo at the start");
+    assert!(game.mark(0, 0, Square::Filled));
+    assert_eq!(game.square(0, 0), Square::Filled);
+    assert_eq!(game.moves_made(), 1);
+
+    assert!(!game.mark(0, 0, Square::Filled), "the same mark twice");
+    assert_eq!(game.moves_made(), 1);
+
+    assert!(game.undo());
+    assert_eq!(game.square(0, 0), Square::Unknown);
+    assert_eq!(game.moves_made(), 0);
 }

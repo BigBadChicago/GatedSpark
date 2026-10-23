@@ -102,6 +102,32 @@ ADR 0004 requires.
 It is declared under `[target.'cfg(target_arch = "wasm32")'.dependencies]`, so a build or a test on
 an ordinary machine never compiles it, and nothing outside `src/browser.rs` can reach it.
 
+### Playing goes through the core, and the core decides whether it is solved
+
+`src/play.rs` holds a `Session`: a loaded puzzle, its rules, and a `gs_core::Timeline`. Every
+question a move raises is answered elsewhere — whether it is legal by `Ruleset::transition`, what
+the board becomes by `Delta::apply` through the timeline, whether undo and redo are possible by the
+timeline, and **whether the puzzle is solved by `Ruleset::is_solved`**.
+
+The last one is the whole reason the module is thin. A page working out for itself whether a board
+is finished is the easiest mistake available here and the most expensive: two answers to one
+question, disagreeing one day, with the wrong one in front of the player. `Nonogram::is_solved`
+checks the clues rather than a stored answer, and that is the only definition of solved this project
+has. `Session::is_solved` asks it every time, with no cached flag — which is what
+`solving_then_undoing_one_move_is_no_longer_solved` exists to catch somebody optimising away.
+
+Three smaller decisions, each with a test:
+
+- **Clearing a square is a move, not an undo.** A player retracting a guess has made a new
+  decision. The difference shows in whether redo has anything to do.
+- **A tap past the edge of the board is refused, not wrapped.** Working a square's position out
+  from a row and a column by arithmetic alone turns one past the last column of row 0 into the
+  first square of row 1, so a player tapping just outside the board would mark a square somewhere
+  else. `mark_at` checks the bounds against the board's dimensions first.
+- **A session owns its puzzle, and a `Session` can only be started from a `Playable`.** So there
+  is no way to play a puzzle whose signature was not checked: the only source of a `Playable` is
+  `load`.
+
 ### The translation layer decides nothing
 
 `src/browser.rs` is the only file that knows a web page exists. It holds no rules, decides no
@@ -126,8 +152,9 @@ that will eventually be skipped.
 - It also does not refuse a package whose answer was never replayed. The store refuses that on the
   way in (ADR 0008), which is the right place: by the time bytes reach a browser the judgement has
   been made, and the report carries it for a page that wants to show it.
-- Nothing is playable yet. This piece carries the trust chain into the browser and stops there,
-  deliberately, because that is the part that could have turned out to be impossible.
+- A puzzle is now playable in a browser: marking squares, undo and redo, and the real goal check.
+  What is still missing is the page itself — the drawing and the tapping — and the offline buffer.
+  `Game` is the whole surface a page needs, and it is small enough to list in one screen.
 
 ## Enforcement
 
@@ -152,7 +179,13 @@ that will eventually be skipped.
 | Every refusal explains itself without showing a type name | `loading::every_refusal_explains_itself_in_words_a_person_can_read` |
 | The browser does not re-decide publication | `loading::a_replay_that_was_never_reproduced_still_loads_but_is_visible` |
 
-| The translation layer works in a real browser | `in_a_real_browser::*`, six tests inside headless Chrome |
+| The translation layer works in a real browser | `in_a_real_browser::*`, nine tests inside headless Chrome |
+| Playing the puzzle's own answer solves it, and nothing less does | `playing::playing_the_real_answer_solves_the_puzzle`, with `..._a_board_one_square_short_is_not_solved`, `..._a_full_board_with_a_wrong_square_is_not_solved` and `..._filling_every_square_does_not_solve_it` as its anti-vacuity guards |
+| "Solved" is asked of the rules every time, never cached | `playing::solving_then_undoing_one_move_is_no_longer_solved`, `..._the_session_agrees_with_the_rules_about_being_solved` |
+| Undo returns the board to exactly what it was | `playing::a_mark_shows_up_and_undo_takes_it_back_exactly`, `..._the_fingerprint_changes_with_the_board_and_comes_back_on_undo` |
+| Clearing a square is a move, not an undo | `playing::clearing_a_square_is_a_move_and_not_an_undo` |
+| A tap past the edge of the board does not wrap onto the next row | `playing::a_column_past_the_edge_does_not_wrap_onto_the_next_row` |
+| A puzzle is played to completion in a real browser | `in_a_real_browser::a_puzzle_can_be_played_and_solved_in_a_browser` |
 
 ### On the browser test
 

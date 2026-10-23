@@ -270,9 +270,15 @@ fn an_answer_that_does_not_match_the_signed_report_is_refused() {
 }
 
 #[test]
-fn an_answer_swapped_on_disk_after_the_fact_is_caught_on_the_way_out() {
+fn an_answer_corrupted_on_disk_after_the_fact_is_caught_on_the_way_out() {
     // The case the design is really for: the store was written correctly and the answer
-    // file was replaced afterwards. Every read re-checks, so this is found.
+    // file changed afterwards. Every read re-checks, so this is found.
+    //
+    // "Corrupted" rather than "swapped", which is what this was first called. The check
+    // is a 64-bit FNV hash recorded in the signed report, and `gs_core::hash` is explicit
+    // that it guards against *accidental* collision. It catches damage; it does not stop
+    // somebody who can write here and is willing to craft a colliding answer. See the
+    // module documentation on `gs-store` for what that does and does not cover.
     let temp = TempStore::new("swapped");
     let (id, _, witness) = store_one(&temp, 1);
 
