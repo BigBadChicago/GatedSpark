@@ -1080,6 +1080,71 @@ fn publishing_leaves_every_answer_behind() {
     );
 }
 
+/// The page folder normally has a working store in it, and a working store has answers.
+///
+/// Found by pointing the upload script at a real published folder, which refused it. The
+/// published `store` must come from `--store` and nowhere else; `--page` carrying a
+/// second one would quietly undo the care taken above.
+#[test]
+fn the_page_folder_cannot_smuggle_its_own_store_into_the_published_one() {
+    let temp = Temp::new("pagestore");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "THE PAGE FOLDER'S STORE") else {
+        return;
+    };
+    let scheduled = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(scheduled.status.success(), "{}", stderr(&scheduled));
+
+    // A page folder shaped like a developer's: a page, and a store of its own with an
+    // answer sitting in it.
+    let page = temp.join("page");
+    std::fs::create_dir_all(page.join("store").join("whatever")).expect("a page folder");
+    std::fs::write(page.join("index.html"), "<!doctype html>").expect("a page");
+    std::fs::write(
+        page.join("store").join("whatever").join("witness.bin"),
+        [1, 2, 3],
+    )
+    .expect("an answer");
+
+    let site = temp.text("site");
+    let out = run(&[
+        "publish",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--out",
+        &site,
+        "--page",
+        page.to_str().expect("text"),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        count_named(&temp.join("site"), "witness.bin"),
+        0,
+        "the page folder's store was copied into the published folder, answers and all"
+    );
+    assert!(
+        temp.join("site").join("index.html").is_file(),
+        "the page itself should still be published"
+    );
+    assert!(
+        stdout(&out).contains("was NOT copied"),
+        "skipping it should be said out loud: {}",
+        stdout(&out)
+    );
+}
+
 /// Publishing with nothing scheduled would be a folder a visitor cannot use.
 #[test]
 fn publishing_without_a_schedule_is_refused() {
