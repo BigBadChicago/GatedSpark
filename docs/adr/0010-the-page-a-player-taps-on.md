@@ -129,6 +129,12 @@ the page's only assumption is that bytes arrive.
   person to look at. No test compares them to anything.
 * **The page is not accessible to a screen reader beyond the basics.** Each square is a
   focusable control with a row and column label, and that is all. Nothing tests it.
+* **`cargo test --workspace` does not run the browser tests.** They need the wasm target
+  and a browser, so they are a separate command, and CI is where they actually run. This
+  cost a red build: the rule change above was made with the whole native suite green, and
+  a browser test carrying the same stale assumption about undo was missed because nothing
+  local had run it. Running `cargo test -p gs-web --target wasm32-unknown-unknown` is part
+  of changing anything about playing, and is not enforced by anything but this line.
 * **The demo content is generated, not committed.** `scripts/demo-web.sh` makes it from a
   development key. There is no fixed sample puzzle in the repository, so a change that
   broke loading would be caught by the tests but not by a stale file.

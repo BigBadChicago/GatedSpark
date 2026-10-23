@@ -263,10 +263,42 @@ fn a_puzzle_can_be_played_and_solved_in_a_browser() {
     // the content fingerprint, which is SHA-256.
     assert_eq!(game.board_fingerprint().len(), 16);
 
+    // Crossing out is optional since 2026-10-23, so the squares the answer leaves blank
+    // need not have been marked at all. Check that directly, in a browser: a board with
+    // only its filled squares marked is finished.
+    let mut only_the_filled_ones = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+    for (i, &square) in answer.iter().enumerate() {
+        if square != Square::Filled {
+            continue;
+        }
+        let row = u16::try_from(i / usize::from(width)).expect("fits");
+        let column = u16::try_from(i % usize::from(width)).expect("fits");
+        only_the_filled_ones.mark(row, column, square);
+    }
+    assert!(
+        only_the_filled_ones.is_solved(),
+        "filling the right squares and crossing out nothing must finish it"
+    );
+
     // And the cached-answer check, which is where a page that decided for itself would
-    // show up.
+    // show up. The move undone has to be a *filled* square: since crossing out became
+    // optional, undoing a cross-out correctly leaves the board finished, so ending on
+    // one would make this pass for the wrong reason.
+    let a_filled_square = answer
+        .iter()
+        .position(|&square| square == Square::Filled)
+        .expect("any real answer fills at least one square");
+    let row = u16::try_from(a_filled_square / usize::from(width)).expect("fits");
+    let column = u16::try_from(a_filled_square % usize::from(width)).expect("fits");
+    assert!(game.mark(row, column, Square::Unknown), "clearing it");
+    assert!(game.mark(row, column, Square::Filled), "filling it back in");
+    assert!(game.is_solved());
+
     assert!(game.undo(), "there are moves to undo");
-    assert!(!game.is_solved(), "undoing the last move un-solves it");
+    assert!(!game.is_solved(), "undoing a filled square un-solves it");
     assert!(game.redo(), "and redo puts it back");
     assert!(game.is_solved());
 }
