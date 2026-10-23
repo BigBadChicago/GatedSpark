@@ -61,3 +61,8 @@ echo
 echo "==> $made puzzles ready. To look at the page:"
 echo "    python3 -m http.server 8080 --directory $www"
 echo "    then open http://127.0.0.1:8080/"
+echo
+echo "==> to try withdrawing one, pick a name from the list above and run:"
+echo "    cargo run -p gs-cli -- withdraw --store $www/store --key $key \\"
+echo "        --add <name> --reason many-answers"
+echo "    then press 'Check for withdrawn puzzles' on the page"

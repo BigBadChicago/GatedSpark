@@ -10,7 +10,16 @@ use gs_core::package::OpenError;
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_offline::buffer::{name_for, NotKept, NothingToPlay, PREFIX};
 use gs_offline::shelf::{AlwaysFails, Memory, Shelf};
-use gs_offline::{Buffer, HOW_MANY_AHEAD};
+use gs_offline::{Buffer, Standing, HOW_MANY_AHEAD};
+
+/// No puzzle has been withdrawn.
+///
+/// Every call below takes the withdrawals this device knows about, and these tests are
+/// about the buffer rather than about withdrawals, so they all pass this. What happens
+/// when something *has* been withdrawn is `withdrawing.rs`.
+fn nothing() -> Standing {
+    Standing::nothing()
+}
 
 /// A device with nothing on it yet.
 fn a_blank_device() -> (Buffer, Memory, TrustedKeys) {
@@ -21,7 +30,7 @@ fn a_blank_device() -> (Buffer, Memory, TrustedKeys) {
 fn fill(buffer: &Buffer, shelf: &mut Memory, keys: &TrustedKeys, n: u64) {
     for i in 0..n {
         buffer
-            .keep(shelf, &a_package(i), &Sha256, keys)
+            .keep(shelf, &a_package(i), &Sha256, keys, &nothing())
             .expect("a package this device trusts is kept");
     }
 }
@@ -37,9 +46,11 @@ fn a_puzzle_kept_can_be_played_back_with_no_network_of_any_kind() {
     let package = a_package_at(1, "gentle");
 
     let id = buffer
-        .keep(&mut shelf, &package, &Sha256, &keys)
+        .keep(&mut shelf, &package, &Sha256, &keys, &nothing())
         .expect("kept");
-    let delivered = buffer.next(&shelf, &Sha256, &keys).expect("handed over");
+    let delivered = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("handed over");
 
     assert_eq!(delivered.content_id, id);
     assert_eq!(delivered.signed_by, KEY_ID);
@@ -53,7 +64,7 @@ fn the_name_a_puzzle_is_kept_under_is_its_own_fingerprint() {
     // id is not one, which is the whole reason the package carries it.
     let (buffer, mut shelf, keys) = a_blank_device();
     let id = buffer
-        .keep(&mut shelf, &a_package(1), &Sha256, &keys)
+        .keep(&mut shelf, &a_package(1), &Sha256, &keys, &nothing())
         .expect("kept");
 
     assert_eq!(shelf.names().expect("names"), vec![name_for(&id)]);
@@ -66,10 +77,10 @@ fn keeping_the_same_puzzle_twice_keeps_one_copy() {
     let (buffer, mut shelf, keys) = a_blank_device();
     let package = a_package(1);
     let first = buffer
-        .keep(&mut shelf, &package, &Sha256, &keys)
+        .keep(&mut shelf, &package, &Sha256, &keys, &nothing())
         .expect("kept");
     let again = buffer
-        .keep(&mut shelf, &package, &Sha256, &keys)
+        .keep(&mut shelf, &package, &Sha256, &keys, &nothing())
         .expect("kept again");
 
     assert_eq!(first, again);
@@ -80,7 +91,13 @@ fn keeping_the_same_puzzle_twice_keeps_one_copy() {
 fn a_puzzle_from_a_stranger_is_never_kept() {
     let (buffer, mut shelf, keys) = a_blank_device();
 
-    match buffer.keep(&mut shelf, &signed_by_a_stranger(1), &Sha256, &keys) {
+    match buffer.keep(
+        &mut shelf,
+        &signed_by_a_stranger(1),
+        &Sha256,
+        &keys,
+        &nothing(),
+    ) {
         Err(NotKept::NotAcceptable(OpenError::SignatureRejected)) => {}
         other => panic!("a stranger's puzzle must be refused, got {other:?}"),
     }
@@ -98,7 +115,7 @@ fn a_puzzle_with_one_byte_changed_is_never_kept() {
     package[last] ^= 1;
 
     assert!(matches!(
-        buffer.keep(&mut shelf, &package, &Sha256, &keys),
+        buffer.keep(&mut shelf, &package, &Sha256, &keys, &nothing()),
         Err(NotKept::NotAcceptable(_))
     ));
     assert!(shelf.is_empty());
@@ -109,7 +126,7 @@ fn something_that_is_not_a_package_is_never_kept() {
     let (buffer, mut shelf, keys) = a_blank_device();
     for rubbish in [b"".as_slice(), b"hello".as_slice(), &[0xff; 200]] {
         assert!(matches!(
-            buffer.keep(&mut shelf, rubbish, &Sha256, &keys),
+            buffer.keep(&mut shelf, rubbish, &Sha256, &keys, &nothing()),
             Err(NotKept::NotAcceptable(_))
         ));
     }
@@ -125,7 +142,7 @@ fn a_device_with_nothing_on_it_says_so_in_words_a_person_can_read() {
     let (buffer, shelf, keys) = a_blank_device();
 
     let why = buffer
-        .next(&shelf, &Sha256, &keys)
+        .next(&shelf, &Sha256, &keys, &nothing())
         .expect_err("there is nothing to play");
     assert_eq!(why, NothingToPlay::Empty);
 
@@ -146,7 +163,7 @@ fn a_puzzle_that_was_edited_on_the_shelf_is_never_handed_over() {
     // few clicks from being edited by hand. Nothing comes off it unchecked.
     let (buffer, mut shelf, keys) = a_blank_device();
     let id = buffer
-        .keep(&mut shelf, &a_package(1), &Sha256, &keys)
+        .keep(&mut shelf, &a_package(1), &Sha256, &keys, &nothing())
         .expect("kept");
 
     // Reach around the buffer and tamper with what it stored.
@@ -159,7 +176,7 @@ fn a_puzzle_that_was_edited_on_the_shelf_is_never_handed_over() {
     shelf.put(&name_for(&id), &stored).expect("written");
 
     assert_eq!(
-        buffer.next(&shelf, &Sha256, &keys).err(),
+        buffer.next(&shelf, &Sha256, &keys, &nothing()).err(),
         Some(NothingToPlay::Empty),
         "an edited puzzle must not be handed to a player"
     );
@@ -176,7 +193,7 @@ fn a_stranger_s_puzzle_planted_on_the_shelf_is_never_handed_over() {
         .expect("written");
 
     assert_eq!(
-        buffer.next(&shelf, &Sha256, &keys).err(),
+        buffer.next(&shelf, &Sha256, &keys, &nothing()).err(),
         Some(NothingToPlay::Empty)
     );
 }
@@ -190,11 +207,11 @@ fn a_bad_puzzle_does_not_hide_the_good_ones_behind_it() {
         .put("ahead/planted-by-somebody-else", &signed_by_a_stranger(1))
         .expect("written");
     let good = buffer
-        .keep(&mut shelf, &a_package(7), &Sha256, &keys)
+        .keep(&mut shelf, &a_package(7), &Sha256, &keys, &nothing())
         .expect("kept");
 
     let delivered = buffer
-        .next(&shelf, &Sha256, &keys)
+        .next(&shelf, &Sha256, &keys, &nothing())
         .expect("the good one is still playable");
     assert_eq!(delivered.content_id, good);
 }
@@ -207,15 +224,17 @@ fn things_on_the_shelf_that_are_not_puzzles_are_left_alone() {
     shelf.put("a-setting", b"dark mode").expect("written");
     shelf.put("the-players-name", b"Sam").expect("written");
     buffer
-        .keep(&mut shelf, &a_package(1), &Sha256, &keys)
+        .keep(&mut shelf, &a_package(1), &Sha256, &keys, &nothing())
         .expect("kept");
 
-    let stock = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    let stock = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
     assert_eq!(stock.sound, 1, "the settings are not puzzles");
     assert_eq!(stock.spoiled, 0, "and they are not broken puzzles either");
 
     assert_eq!(
-        buffer.discard_spoiled(&mut shelf, &Sha256, &keys),
+        buffer.discard_spoiled(&mut shelf, &Sha256, &keys, &nothing()),
         Ok(0),
         "throwing away bad puzzles must not throw away the settings"
     );
@@ -236,11 +255,18 @@ fn being_handed_a_puzzle_is_not_the_same_as_having_played_it() {
     let (buffer, mut shelf, keys) = a_blank_device();
     fill(&buffer, &mut shelf, &keys, 3);
 
-    let first = buffer.next(&shelf, &Sha256, &keys).expect("one");
-    let again = buffer.next(&shelf, &Sha256, &keys).expect("the same one");
+    let first = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("one");
+    let again = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("the same one");
     assert_eq!(first.content_id, again.content_id);
     assert_eq!(
-        buffer.stock(&shelf, &Sha256, &keys).expect("counted").sound,
+        buffer
+            .stock(&shelf, &Sha256, &keys, &nothing())
+            .expect("counted")
+            .sound,
         3,
         "handing a puzzle over does not use it up"
     );
@@ -251,15 +277,22 @@ fn a_puzzle_marked_played_is_not_handed_out_again() {
     let (buffer, mut shelf, keys) = a_blank_device();
     fill(&buffer, &mut shelf, &keys, 3);
 
-    let played = buffer.next(&shelf, &Sha256, &keys).expect("one");
+    let played = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("one");
     buffer
         .played(&mut shelf, &played.content_id)
         .expect("recorded");
 
-    let next = buffer.next(&shelf, &Sha256, &keys).expect("another");
+    let next = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("another");
     assert_ne!(next.content_id, played.content_id);
     assert_eq!(
-        buffer.stock(&shelf, &Sha256, &keys).expect("counted").sound,
+        buffer
+            .stock(&shelf, &Sha256, &keys, &nothing())
+            .expect("counted")
+            .sound,
         2
     );
 }
@@ -270,12 +303,14 @@ fn playing_through_everything_ends_with_the_same_plain_sentence() {
     fill(&buffer, &mut shelf, &keys, 3);
 
     for _ in 0..3 {
-        let one = buffer.next(&shelf, &Sha256, &keys).expect("one left");
+        let one = buffer
+            .next(&shelf, &Sha256, &keys, &nothing())
+            .expect("one left");
         buffer.played(&mut shelf, &one.content_id).expect("played");
     }
 
     assert_eq!(
-        buffer.next(&shelf, &Sha256, &keys).err(),
+        buffer.next(&shelf, &Sha256, &keys, &nothing()).err(),
         Some(NothingToPlay::Empty)
     );
 }
@@ -288,7 +323,7 @@ fn every_puzzle_is_handed_out_exactly_once() {
     fill(&buffer, &mut shelf, &keys, 5);
 
     let mut seen = Vec::new();
-    while let Ok(one) = buffer.next(&shelf, &Sha256, &keys) {
+    while let Ok(one) = buffer.next(&shelf, &Sha256, &keys, &nothing()) {
         buffer.played(&mut shelf, &one.content_id).expect("played");
         seen.push(one.content_id);
     }
@@ -314,7 +349,7 @@ fn the_target_is_five_and_a_device_knows_how_many_more_to_ask_for() {
 
     assert_eq!(
         buffer
-            .stock(&shelf, &Sha256, &keys)
+            .stock(&shelf, &Sha256, &keys, &nothing())
             .expect("counted")
             .wanted(),
         5
@@ -322,13 +357,15 @@ fn the_target_is_five_and_a_device_knows_how_many_more_to_ask_for() {
     fill(&buffer, &mut shelf, &keys, 2);
     assert_eq!(
         buffer
-            .stock(&shelf, &Sha256, &keys)
+            .stock(&shelf, &Sha256, &keys, &nothing())
             .expect("counted")
             .wanted(),
         3
     );
     fill(&buffer, &mut shelf, &keys, 5);
-    let stock = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    let stock = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
     assert_eq!(stock.sound, 5);
     assert_eq!(stock.wanted(), 0);
 }
@@ -338,7 +375,9 @@ fn holding_more_than_the_target_asks_for_none_rather_than_a_negative_number() {
     let (buffer, mut shelf, keys) = a_blank_device();
     fill(&buffer, &mut shelf, &keys, 9);
 
-    let stock = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    let stock = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
     assert_eq!(stock.sound, 9, "the buffer holds what it is given");
     assert_eq!(stock.wanted(), 0);
 }
@@ -347,13 +386,18 @@ fn holding_more_than_the_target_asks_for_none_rather_than_a_negative_number() {
 fn a_spoiled_puzzle_counts_against_the_target_so_the_device_asks_for_a_replacement() {
     let (buffer, mut shelf, keys) = a_blank_device();
     fill(&buffer, &mut shelf, &keys, 5);
-    let id = buffer.next(&shelf, &Sha256, &keys).expect("one").content_id;
+    let id = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("one")
+        .content_id;
 
     let mut stored = shelf.get(&name_for(&id)).expect("readable").expect("there");
     stored[10] ^= 0xff;
     shelf.put(&name_for(&id), &stored).expect("written");
 
-    let stock = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    let stock = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
     assert_eq!(stock.sound, 4);
     assert_eq!(stock.spoiled, 1, "it is counted, not hidden");
     assert_eq!(stock.wanted(), 1, "and a replacement is asked for");
@@ -367,8 +411,13 @@ fn throwing_away_the_spoiled_ones_keeps_the_rest() {
         .put("ahead/not-even-a-package", b"rubbish")
         .expect("written");
 
-    assert_eq!(buffer.discard_spoiled(&mut shelf, &Sha256, &keys), Ok(1));
-    let stock = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    assert_eq!(
+        buffer.discard_spoiled(&mut shelf, &Sha256, &keys, &nothing()),
+        Ok(1)
+    );
+    let stock = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
     assert_eq!(stock.sound, 3);
     assert_eq!(stock.spoiled, 0);
 }
@@ -384,8 +433,12 @@ fn reading_the_buffer_never_throws_anything_away_by_itself() {
         .expect("written");
     fill(&buffer, &mut shelf, &keys, 1);
 
-    let _ = buffer.next(&shelf, &Sha256, &keys).expect("the good one");
-    let _ = buffer.stock(&shelf, &Sha256, &keys).expect("counted");
+    let _ = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("the good one");
+    let _ = buffer
+        .stock(&shelf, &Sha256, &keys, &nothing())
+        .expect("counted");
 
     assert_eq!(
         shelf.get("ahead/not-even-a-package").expect("readable"),
@@ -404,7 +457,7 @@ fn a_device_that_will_not_store_anything_says_so_rather_than_pretending() {
     let keys = this_device_trusts_us();
     let mut broken = AlwaysFails("this browser is in a private window".to_owned());
 
-    match buffer.keep(&mut broken, &a_package(1), &Sha256, &keys) {
+    match buffer.keep(&mut broken, &a_package(1), &Sha256, &keys, &nothing()) {
         Err(NotKept::ShelfBroke(why)) => {
             assert!(why.to_string().contains("private window"));
         }
@@ -420,7 +473,7 @@ fn a_device_that_will_not_read_says_so_rather_than_claiming_to_be_empty() {
     let keys = this_device_trusts_us();
     let broken = AlwaysFails("storage is unavailable".to_owned());
 
-    match buffer.next(&broken, &Sha256, &keys) {
+    match buffer.next(&broken, &Sha256, &keys, &nothing()) {
         Err(NothingToPlay::ShelfBroke(why)) => {
             assert!(why.to_string().contains("unavailable"));
         }
@@ -460,9 +513,11 @@ fn the_buffer_holds_a_package_from_a_family_that_does_not_exist() {
     // puzzle, and the buffer has handled all of them without noticing.
     let (buffer, mut shelf, keys) = a_blank_device();
     let id = buffer
-        .keep(&mut shelf, &a_package(1), &Sha256, &keys)
+        .keep(&mut shelf, &a_package(1), &Sha256, &keys, &nothing())
         .expect("kept");
-    let delivered = buffer.next(&shelf, &Sha256, &keys).expect("handed over");
+    let delivered = buffer
+        .next(&shelf, &Sha256, &keys, &nothing())
+        .expect("handed over");
 
     assert_eq!(delivered.content_id, id);
     assert!(
@@ -480,7 +535,7 @@ fn a_device_that_trusts_nobody_accepts_nothing() {
     let nobody = TrustedKeys::none();
 
     assert!(matches!(
-        buffer.keep(&mut shelf, &a_package(1), &Sha256, &nobody),
+        buffer.keep(&mut shelf, &a_package(1), &Sha256, &nobody, &nothing()),
         Err(NotKept::NotAcceptable(_))
     ));
     assert!(shelf.is_empty());
@@ -499,11 +554,17 @@ fn a_device_that_trusts_a_different_key_accepts_nothing_of_ours() {
         .expect("valid");
 
     assert!(matches!(
-        buffer.keep(&mut shelf, &a_package(1), &Sha256, &theirs),
+        buffer.keep(&mut shelf, &a_package(1), &Sha256, &theirs, &nothing()),
         Err(NotKept::NotAcceptable(_))
     ));
     // And the anti-vacuity half: their own package is fine under their own key.
     assert!(buffer
-        .keep(&mut shelf, &signed_by_a_stranger(1), &Sha256, &theirs)
+        .keep(
+            &mut shelf,
+            &signed_by_a_stranger(1),
+            &Sha256,
+            &theirs,
+            &nothing()
+        )
         .is_ok());
 }

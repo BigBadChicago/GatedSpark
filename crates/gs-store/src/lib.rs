@@ -103,12 +103,20 @@ use std::path::{Path, PathBuf};
 use gs_core::content::{ContentId, Digest};
 use gs_core::hash::StateHash;
 use gs_core::package::{open, Opened, RecordedReplay, SignatureVerifier};
+use gs_core::withdrawal::{open_list, OpenedList};
 
 /// The file inside a puzzle's directory that holds the package.
 pub const PACKAGE_FILE: &str = "package.gspk";
 
 /// The file inside a puzzle's directory that holds the answer.
 pub const WITNESS_FILE: &str = "witness.bin";
+
+/// The file at the store's root that holds the signed "do not play these" list.
+///
+/// At the root rather than in a puzzle's directory, because it is about the store as a
+/// whole and there is exactly one current one. [`Store::list`] skips it, because it only
+/// reports directories.
+pub const WITHDRAWALS_FILE: &str = "withdrawals.gspk";
 
 /// Why a store operation failed.
 #[derive(Debug)]
@@ -126,6 +134,10 @@ pub enum StoreError {
     /// On the way in, this means something handed the store a package it should not
     /// keep. On the way out, it means the stored file has changed since it was written.
     NotAValidPackage(gs_core::package::OpenError),
+    /// The withdrawal list did not survive being opened. Its own variant rather than
+    /// sharing the one above, because "the list of withdrawn puzzles is unreadable" and
+    /// "a puzzle is unreadable" need very different responses from whoever reads this.
+    NotAValidList(gs_core::package::OpenError),
     /// The package says its witness replayed to one hash, and the stored witness hashes
     /// to another. Either the answer file was replaced, or it belongs to a different
     /// puzzle.
@@ -169,6 +181,9 @@ impl std::fmt::Display for StoreError {
         match self {
             StoreError::Io { doing, cause } => write!(f, "{doing}: {cause}"),
             StoreError::NotAValidPackage(why) => write!(f, "not a valid package: {why:?}"),
+            StoreError::NotAValidList(why) => {
+                write!(f, "not a valid list of withdrawn puzzles: {why:?}")
+            }
             StoreError::WitnessDoesNotMatch { signed, stored } => write!(
                 f,
                 "the stored answer hashes to {} but the signed report says {}",
@@ -391,6 +406,69 @@ impl Store {
         }
         ids.sort_unstable();
         Ok(ids)
+    }
+
+    /// Where the current withdrawal list is kept.
+    #[must_use]
+    pub fn withdrawals_path(&self) -> PathBuf {
+        self.root.join(WITHDRAWALS_FILE)
+    }
+
+    /// Write a signed withdrawal list, checking it first.
+    ///
+    /// The same rule as [`Store::put`]: nothing enters this store unverified. A list
+    /// that cannot be opened here would be a list a device refuses, discovered by the
+    /// devices rather than by the publisher.
+    ///
+    /// It does **not** check that the serial number is higher than the one already
+    /// there. That is a decision about what to publish, not about what a store may hold,
+    /// and the caller is the one that knows whether it is replacing a list or recovering
+    /// from a mistake. [`Store::withdrawals`] is how the caller finds out what is there.
+    pub fn put_withdrawals<D: Digest, V: SignatureVerifier>(
+        &self,
+        bytes: &[u8],
+        digest: &D,
+        verifier: &V,
+    ) -> Result<OpenedList, StoreError> {
+        let opened = open_list(bytes, digest, verifier).map_err(StoreError::NotAValidList)?;
+        let path = self.withdrawals_path();
+        // Written beside the target and renamed, so an interrupted write leaves the old
+        // list in place rather than half of a new one. A half-written list would be
+        // refused by every device, which is safe, but it would also mean no withdrawal
+        // at all.
+        let staging = self.root.join(".withdrawals.gspk.part");
+        io(
+            format!("writing {}", staging.display()),
+            std::fs::write(&staging, bytes),
+        )?;
+        io(
+            format!("putting {} in place", path.display()),
+            std::fs::rename(&staging, &path),
+        )?;
+        Ok(opened)
+    }
+
+    /// The current withdrawal list, read back through its signature.
+    ///
+    /// `Ok(None)` means there is no list, which is a different fact from a list naming
+    /// nothing: the second one is a publisher saying so, and the first is a publisher
+    /// who has not said anything yet.
+    pub fn withdrawals<D: Digest, V: SignatureVerifier>(
+        &self,
+        digest: &D,
+        verifier: &V,
+    ) -> Result<Option<OpenedList>, StoreError> {
+        let path = self.withdrawals_path();
+        match std::fs::read(&path) {
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(cause) => Err(StoreError::Io {
+                doing: format!("reading {}", path.display()),
+                cause,
+            }),
+            Ok(bytes) => open_list(&bytes, digest, verifier)
+                .map(Some)
+                .map_err(StoreError::NotAValidList),
+        }
     }
 
     /// Re-check every puzzle in the store.

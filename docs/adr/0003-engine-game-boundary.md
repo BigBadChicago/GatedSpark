@@ -236,12 +236,21 @@ there are players. The thresholds are provisional and the module says so.
 | The buffer knows about no game and no device | `buffering.rs::the_buffer_holds_a_package_from_a_family_that_does_not_exist`, and `gs-offline`'s dependency list |
 | Reading the buffer never deletes anything | `buffering.rs::reading_the_buffer_never_throws_anything_away_by_itself` |
 | A player's shuffled order never moves what is already behind the bookmark | `ordering.rs::growing_the_pool_never_moves_anything_already_in_the_order`, `nothing_already_played_is_ever_handed_out_again_after_the_pool_grows` |
+| A withdrawn puzzle is deleted from a device rather than hidden on it | `gs-offline/tests/withdrawing.rs::a_withdrawn_puzzle_is_deleted_from_the_device_and_not_merely_hidden`, `clearing_the_devices_notes_cannot_bring_a_withdrawn_puzzle_back`, `in_a_real_browser.rs::a_withdrawn_puzzle_is_deleted_from_a_real_browsers_storage` |
+| An old withdrawal list served again cannot un-withdraw a puzzle | `withdrawing.rs::an_older_list_served_again_cannot_un_withdraw_a_puzzle`, `in_a_real_browser.rs::an_older_list_replayed_to_a_browser_cannot_un_withdraw_a_puzzle` |
+| A signature over a puzzle can never stand for a withdrawal | `gs-core/tests/withdrawal.rs::a_signature_over_a_puzzle_can_never_stand_for_a_withdrawal` |
+| A withdrawal list is checked against the trusted key, on the way in and every time it is read | `withdrawing.rs::a_list_from_a_key_this_device_does_not_trust_is_ignored`, `a_stored_list_that_has_been_tampered_with_is_reported_and_not_obeyed`, `in_a_real_browser.rs::a_list_from_a_stranger_is_ignored_in_a_browser_too` |
+| A puzzle somebody is part-way through is stopped when it is withdrawn | `drive-page.mjs` — by hand |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
-- **Withdrawing a puzzle already downloaded.** A device holding a perfectly signed puzzle that
-  should no longer be played has no way of being told. Damaged and tampered files are covered;
-  this is not, and it is the last remaining hole in the offline story. See ADR 0011.
+- ~~**Withdrawing a puzzle already downloaded.**~~ **Resolved 2026-10-23 by ADR 0012.** A signed
+  "do not play these" list, with a serial number that only goes up, and a device that deletes
+  what it names. What remains, and cannot be fixed by any design: a device that never connects
+  never hears about a withdrawal.
+- **`Page::open` is unguarded, and has to be.** It is the package check on its own and works
+  where there is no storage to read a withdrawal list from. `Page::open_for_play` is the guarded
+  one, the page uses it, and nothing stops a future caller using the other. See ADR 0012.
 - **The page is only checked by hand.** `scripts/check-page.sh` drives the real page in a real
   browser and is the only thing that tests the page at all, but it is not in CI: it needs a
   browser-driving dependency this project has not taken on. The wasm tests in CI prove the *core*

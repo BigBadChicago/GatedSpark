@@ -17,6 +17,9 @@ if (!chromium) throw new Error(`no Chromium in the Playwright at ${where}`);
 const OUT = process.argv[2];
 const WWW = process.argv[3];
 const URL = process.argv[4] ?? 'http://127.0.0.1:8099/';
+// The puzzle check-page.sh has published a withdrawal list for. The list is on the
+// server from the start; this device knows nothing about it until the page asks.
+const DOOMED = process.argv[5];
 
 /** The witness file is a canonical board: width, height, count, then one i16 per cell. */
 function filledSquares(path) {
@@ -79,13 +82,17 @@ await page.evaluate(() => {
   for (const [r, c] of [[0, 0], [1, 1], [2, 3], [3, 0], [4, 4]]) window.gatedspark.tap(r, c);
   window.gatedspark.tap(1, 1); // a second tap: filled becomes crossed out
 });
-const afterTaps = await page.evaluate(() => ({
+// The far corner, which none of the taps above reach. Worked out from the board rather
+// than written down: the demo's first puzzle is whatever level comes first, and a square
+// that is off the edge reads as nothing at all rather than as undecided.
+const corner = [details.rowClues - 1, details.colClues - 1];
+const afterTaps = await page.evaluate((far) => ({
   moves: document.getElementById('moves').textContent,
   filled: window.gatedspark.boardAt(0, 0),
   crossed: window.gatedspark.boardAt(1, 1),
-  untouched: window.gatedspark.boardAt(9, 9),
+  untouched: window.gatedspark.boardAt(far[0], far[1]),
   solved: window.gatedspark.isSolved(),
-}));
+}), corner);
 console.log('after taps ' + JSON.stringify(afterTaps));
 if (afterTaps.filled !== 0) await fail('a tap did not fill the square', 'tap');
 if (afterTaps.crossed !== 1) await fail('a second tap did not cross it out', 'tap');
@@ -292,7 +299,118 @@ if (/NothingToPlay|Empty/.test(ranOut.refusal)) {
 }
 await page.screenshot({ path: OUT + '/ran-out.png', fullPage: true });
 
-console.log('console problems ' + JSON.stringify(problems));
+console.log('console problems so far ' + JSON.stringify(problems));
+if (problems.length) { console.log('FAIL: the browser reported errors'); await browser.close(); process.exit(1); }
+
+// ---------------------------------------------------------------------------
+// The "do not play these" list, in a real browser, against real storage
+// ---------------------------------------------------------------------------
+
+if (!DOOMED) { console.log('OK (no withdrawal to drive)'); await browser.close(); process.exit(0); }
+
+// Signal back on, and a clean device, so the counts below mean what they say.
+await page.evaluate(() => {
+  if (document.getElementById('offline').getAttribute('aria-pressed') === 'true') {
+    window.gatedspark.toggleOffline();
+  }
+  window.gatedspark.forgetEverythingSaved();
+});
+
+// Save the doomed puzzle and one other, and open the doomed one so that somebody is
+// part-way through it when the withdrawal lands.
+const others = await page.evaluate(() => [...document.getElementById('pick').options].map((o) => o.value));
+const bystander = others.find((name) => name !== DOOMED);
+if (!bystander) await fail('need two puzzles to tell a withdrawal from a wipe', 'withdraw-setup');
+
+for (const name of [bystander, DOOMED]) {
+  await page.evaluate((n) => window.gatedspark.open(n), name);
+  await page.waitForSelector('#game:not([hidden])');
+  await page.evaluate(() => window.gatedspark.save());
+}
+await page.evaluate(() => { for (const [r, c] of [[0, 0], [1, 1]]) window.gatedspark.tap(r, c); });
+
+const beforeWithdrawal = await page.evaluate(() => ({
+  saved: window.gatedspark.savedLine(),
+  // A u64 crosses into JavaScript as a BigInt, which does not serialize.
+  seen: String(window.gatedspark.withdrawalsSeen()),
+  showing: window.gatedspark.fingerprint(),
+  board: window.gatedspark.boardIsShowing(),
+  keys: Object.keys(localStorage).filter((k) => k.startsWith('gatedspark/')).length,
+}));
+console.log('before the withdrawal ' + JSON.stringify(beforeWithdrawal));
+if (!/2 puzzles saved/.test(beforeWithdrawal.saved)) await fail('two should be saved: ' + beforeWithdrawal.saved, 'withdraw-setup');
+if (beforeWithdrawal.seen !== '0') await fail('this device should know of no list yet, got ' + beforeWithdrawal.seen, 'withdraw-setup');
+if (beforeWithdrawal.showing !== DOOMED) await fail('the doomed puzzle should be on screen', 'withdraw-setup');
+if (!beforeWithdrawal.board) await fail('a board should be showing', 'withdraw-setup');
+if (beforeWithdrawal.keys !== 2) await fail('two packages should be in storage, got ' + beforeWithdrawal.keys, 'withdraw-setup');
+await page.screenshot({ path: OUT + '/before-withdrawal.png', fullPage: true });
+
+// The list arrives.
+await page.evaluate(() => window.gatedspark.checkWithdrawn());
+const afterWithdrawal = await page.evaluate(() => ({
+  note: document.getElementById('note').textContent,
+  refusal: window.gatedspark.refusal(),
+  board: window.gatedspark.boardIsShowing(),
+  saved: window.gatedspark.savedLine(),
+  seen: String(window.gatedspark.withdrawalsSeen()),
+  keys: Object.keys(localStorage).filter((k) => k.startsWith('gatedspark/ahead/')).length,
+}));
+console.log('after the withdrawal ' + JSON.stringify(afterWithdrawal));
+
+// The owner's decision, in as many words: stop it right away.
+if (afterWithdrawal.board) await fail('the board should have closed', 'withdrawn');
+if (!afterWithdrawal.refusal) await fail('closing the board should say why', 'withdrawn');
+if (!/withdrawn/i.test(afterWithdrawal.refusal) || !/more than one answer/i.test(afterWithdrawal.refusal)) {
+  await fail('the reason should be a sentence saying what happened: ' + afterWithdrawal.refusal, 'withdrawn');
+}
+if (/[a-z][A-Z]|::|\{/.test(afterWithdrawal.refusal.replace(/GatedSpark/g, 'x'))) {
+  await fail('the reason reads like a type name: ' + afterWithdrawal.refusal, 'withdrawn');
+}
+// Deleted, not hidden. This is the assertion that a filter-on-the-way-out version of
+// this code would fail.
+if (afterWithdrawal.keys !== 1) await fail('the withdrawn package should be gone from storage, packages left: ' + afterWithdrawal.keys, 'withdrawn');
+if (!/1 puzzle saved/.test(afterWithdrawal.saved)) await fail('one should be left: ' + afterWithdrawal.saved, 'withdrawn');
+if (afterWithdrawal.seen !== '1') await fail('this device should now be going by list 1, got ' + afterWithdrawal.seen, 'withdrawn');
+if (!/deleted/i.test(afterWithdrawal.note)) await fail('the note should say a puzzle was deleted: ' + afterWithdrawal.note, 'withdrawn');
+await page.screenshot({ path: OUT + '/withdrawn.png', fullPage: true });
+
+// Downloading it again is refused, by the same words.
+await page.evaluate((n) => window.gatedspark.open(n), DOOMED);
+const reDownload = await page.evaluate(() => ({
+  refusal: window.gatedspark.refusal(),
+  board: window.gatedspark.boardIsShowing(),
+}));
+console.log('fetching it again ' + JSON.stringify(reDownload));
+if (reDownload.board) await fail('a withdrawn puzzle should not open', 're-download');
+if (!/withdrawn/i.test(reDownload.refusal || '')) await fail('re-fetching should be refused in words: ' + reDownload.refusal, 're-download');
+
+// The anti-vacuity half: everything else still works exactly as before.
+await page.evaluate((n) => window.gatedspark.open(n), bystander);
+await page.waitForSelector('#game:not([hidden])');
+const bystanderState = await page.evaluate(() => ({
+  refusal: window.gatedspark.refusal(),
+  squares: document.querySelectorAll('td.square').length,
+  saved: window.gatedspark.savedLine(),
+}));
+console.log('the other puzzle ' + JSON.stringify(bystanderState));
+if (bystanderState.refusal) await fail('an unwithdrawn puzzle must still open: ' + bystanderState.refusal, 'bystander');
+if (bystanderState.squares === 0) await fail('an unwithdrawn puzzle must still draw', 'bystander');
+
+// And the same list again is refused, because it is not newer. This is the replay the
+// serial number exists for, and the device must say so rather than fail silently.
+await page.evaluate(() => window.gatedspark.checkWithdrawn());
+const replayed = await page.evaluate(() => ({
+  note: document.getElementById('note').textContent,
+  seen: String(window.gatedspark.withdrawalsSeen()),
+  saved: window.gatedspark.savedLine(),
+}));
+console.log('the same list again ' + JSON.stringify(replayed));
+if (!/newer/i.test(replayed.note)) await fail('replaying a list should be refused in words: ' + replayed.note, 'replayed');
+if (replayed.seen !== '1') await fail('the number this device goes by must not move', 'replayed');
+if (!/1 puzzle saved/.test(replayed.saved)) await fail('nothing more should have been deleted: ' + replayed.saved, 'replayed');
+await page.screenshot({ path: OUT + '/withdrawal-replayed.png', fullPage: true });
+
+console.log('console problems after the withdrawal ' + JSON.stringify(problems));
 await browser.close();
 if (problems.length) { console.log('FAIL: the browser reported errors'); process.exit(1); }
 console.log('OK');

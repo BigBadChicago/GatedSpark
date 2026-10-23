@@ -20,10 +20,20 @@
 //! The on-the-way-out check is the one that matters. Dropping it would make the buffer
 //! the one place in this system where bytes are believed because of where they were
 //! found.
+//!
+//! # Withdrawn puzzles
+//!
+//! A puzzle can be perfectly signed and still be one nobody should play. Every call
+//! below takes a [`Standing`] — the withdrawals this device knows about — and none of
+//! them has a default, because a default is a way for a caller to skip the check
+//! without noticing. [`crate::notices`] is where that list comes from and what it
+//! means.
 
 use gs_core::content::{ContentId, Digest};
 use gs_core::package::{open, OpenError, SignatureVerifier};
+use gs_core::withdrawal::Reason;
 
+use crate::notices::Standing;
 use crate::shelf::{Shelf, ShelfError};
 
 /// The agreed number of unplayed puzzles to hold.
@@ -72,6 +82,12 @@ impl std::error::Error for NothingToPlay {}
 pub enum NotKept {
     /// It did not pass the same check a puzzle off the network gets.
     NotAcceptable(OpenError),
+    /// It is signed and sound, and it has been withdrawn.
+    ///
+    /// Refused on the way in as well as on the way out. A device that accepted a
+    /// withdrawn puzzle and then filtered it on the way out would be a device holding
+    /// bytes it has already been told to delete.
+    Withdrawn(Reason),
     /// The storage itself would not answer.
     ShelfBroke(ShelfError),
 }
@@ -84,6 +100,7 @@ impl std::fmt::Display for NotKept {
                 "This puzzle was not saved, because it did not pass the checks a puzzle \
                  has to pass. Nothing has been kept."
             ),
+            NotKept::Withdrawn(why) => write!(f, "This puzzle was not saved, because {why}."),
             NotKept::ShelfBroke(why) => {
                 write!(f, "This device would not let the app save a puzzle: {why}")
             }
@@ -110,10 +127,13 @@ pub struct Delivered {
 /// What the buffer looks like right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stock {
-    /// Unplayed puzzles on the device that pass their checks.
+    /// Unplayed puzzles on the device that pass their checks and are not withdrawn.
     pub sound: usize,
     /// Entries on the shelf that do not. Counted rather than hidden: a device quietly
     /// discarding things is a device nobody can debug.
+    ///
+    /// A withdrawn puzzle still on the shelf counts here, because what the count is for
+    /// is "how many of these can a player still play".
     pub spoiled: usize,
 }
 
@@ -153,9 +173,13 @@ impl Buffer {
         package: &[u8],
         digest: &D,
         keys: &V,
+        standing: &Standing,
     ) -> Result<ContentId, NotKept> {
         let opened = open(package, digest, keys).map_err(NotKept::NotAcceptable)?;
         let id = opened.content_id;
+        if let Some(why) = standing.against(&id) {
+            return Err(NotKept::Withdrawn(why));
+        }
         shelf
             .put(&name_for(&id), package)
             .map_err(NotKept::ShelfBroke)?;
@@ -176,6 +200,7 @@ impl Buffer {
         shelf: &S,
         digest: &D,
         keys: &V,
+        standing: &Standing,
     ) -> Result<Delivered, NothingToPlay> {
         for name in self.held(shelf).map_err(NothingToPlay::ShelfBroke)? {
             let Some(package) = shelf.get(&name).map_err(NothingToPlay::ShelfBroke)? else {
@@ -184,6 +209,13 @@ impl Buffer {
             let Ok(opened) = open(&package, digest, keys) else {
                 continue;
             };
+            // Belt as well as braces. `Notices::accept` deletes what a list names, so
+            // in normal running nothing withdrawn is still here; this catches the case
+            // where the bytes came back — storage restored from a backup, or edited by
+            // hand — and it is the check a player's screen actually depends on.
+            if standing.against(&opened.content_id).is_some() {
+                continue;
+            }
             return Ok(Delivered {
                 content_id: opened.content_id,
                 signed_by: opened.key_id,
@@ -209,13 +241,22 @@ impl Buffer {
         shelf: &S,
         digest: &D,
         keys: &V,
+        standing: &Standing,
     ) -> Result<Stock, ShelfError> {
         let mut sound = 0;
         let mut spoiled = 0;
         for name in self.held(shelf)? {
-            match shelf.get(&name)? {
-                Some(package) if open(&package, digest, keys).is_ok() => sound += 1,
-                _ => spoiled += 1,
+            let good = match shelf.get(&name)? {
+                Some(package) => match open(&package, digest, keys) {
+                    Ok(opened) => standing.against(&opened.content_id).is_none(),
+                    Err(_) => false,
+                },
+                None => false,
+            };
+            if good {
+                sound += 1;
+            } else {
+                spoiled += 1;
             }
         }
         Ok(Stock { sound, spoiled })
@@ -232,11 +273,17 @@ impl Buffer {
         shelf: &mut S,
         digest: &D,
         keys: &V,
+        standing: &Standing,
     ) -> Result<usize, ShelfError> {
         let mut thrown = Vec::new();
         for name in self.held(shelf)? {
-            let keep =
-                matches!(shelf.get(&name)?, Some(package) if open(&package, digest, keys).is_ok());
+            let keep = match shelf.get(&name)? {
+                Some(package) => match open(&package, digest, keys) {
+                    Ok(opened) => standing.against(&opened.content_id).is_none(),
+                    Err(_) => false,
+                },
+                None => false,
+            };
             if !keep {
                 thrown.push(name);
             }
@@ -260,5 +307,24 @@ impl Buffer {
 /// Where a puzzle with this id is kept.
 #[must_use]
 pub fn name_for(id: &ContentId) -> String {
-    format!("{PREFIX}{}", id.to_hex())
+    name_for_bytes(id.as_bytes())
+}
+
+/// The same, from plain bytes.
+///
+/// A withdrawal list names ids as plain bytes, because a number in a file is somebody's
+/// claim and not a digest of anything this code has seen, and this codebase does not let
+/// a [`ContentId`] be built from a number. So the withdrawal side needs this door.
+///
+/// [`name_for`] calls it rather than formatting its own, so there is exactly one place
+/// a shelf name is decided. Two ways of writing a name is two ways of getting it wrong.
+#[must_use]
+pub fn name_for_bytes(id: &[u8; 32]) -> String {
+    let mut name = String::with_capacity(PREFIX.len() + 64);
+    name.push_str(PREFIX);
+    for byte in id {
+        name.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is a hex digit"));
+        name.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is a hex digit"));
+    }
+    name
 }
