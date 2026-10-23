@@ -231,6 +231,27 @@ The same puzzle now takes 93 taps. Missing a filled square still leaves it unfin
 ADR 0010.
 
 
+## Playing without a mouse, and without looking
+
+Both games can be played with the keyboard alone. Tab moves between squares (or between the
+lines of the loop game), Enter or Space marks the one you are on.
+
+Every square and every line **says what it is**, not just where it is: "row 2, column 3, filled",
+"line across from dot 4, 1, ruled out". That matters because how a square is drawn tells somebody
+listening to the page nothing at all, and because the core changes squares the player never
+touched — an undo rewrites the whole board — so the name is rebuilt every time the board is,
+never only where the tap landed.
+
+Everything the page says to the player announces itself rather than only appearing: the solved
+message, the running commentary, the saved-puzzle line, and the refusal, which interrupts because
+it means the board in front of you has gone away.
+
+**This is held by tests, because last time it was held by good intentions and it broke.**
+`crates/gs-web/tests/usable_without_a_mouse.rs` runs with the normal suite on every push and fails
+if any of those pieces disappears. `scripts/drive-page.mjs` goes further and actually plays with
+the keyboard in a real browser, checking that a square changes *and says so*. The reasoning, and an
+honest list of what is still not covered, is in `docs/adr/0017-accessibility-is-held-by-tests.md`.
+
 ## Which puzzle is today's
 
 A daily puzzle needs a notion of "today", and this project forbids letting the reader's
