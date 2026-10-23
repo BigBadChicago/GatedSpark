@@ -31,7 +31,7 @@ use gs_crypto::{Ed25519Signer, Sha256};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::publish::publish;
 use gs_nonogram::solve::Budget;
-use gs_web::browser::{Page, Square};
+use gs_web::browser::{Drawn, Page, Side, Square};
 
 // Not in Node, in a browser. The distinction matters: Node has a filesystem and
 // a process model, and a test passing there would say nothing about the place this
@@ -236,7 +236,11 @@ fn a_puzzle_can_be_played_and_solved_in_a_browser() {
             .expect("valid");
             k
         };
-        gs_web::load(&package, &Sha256, &keys).expect("loads").clues
+        gs_web::load(&package, &Sha256, &keys)
+            .expect("loads")
+            .nonogram()
+            .expect("a Nonogram package loads as a Nonogram")
+            .clone()
     };
     let answer = the_answer(&clues);
     let width = puzzle.width();
@@ -706,4 +710,248 @@ fn an_older_list_replayed_to_a_browser_cannot_un_withdraw_a_puzzle() {
     assert!(page.accept_withdrawals(&older).is_err());
     assert_eq!(page.withdrawals_seen().expect("reads"), 9);
     assert!(page.open_for_play(&package).is_err(), "still withdrawn");
+}
+
+// ---------------------------------------------------------------------------
+// The second game, in a real browser
+// ---------------------------------------------------------------------------
+//
+// Not a copy of the tests above for the sake of symmetry. These exist because the
+// claims they check are claims about *this* game inside a browser: that a loop puzzle
+// can be played to the end there, that the browser's own storage hands a loop puzzle
+// back the way it hands a picture puzzle back, and that the "do not play these" list
+// does not care which game it names.
+//
+// The last one is worth saying out loud. The buffer and the withdrawal list were
+// written to know nothing about any game, and nothing proves that like a second game
+// going through them with no change to either.
+
+/// A real, signed Slitherlink package.
+///
+/// Six squares square, which has a loop with corners in it and still builds instantly.
+fn a_signed_loop_package(private_key: &[u8; 32], key_id: &str) -> Vec<u8> {
+    let candidate = gs_slitherlink::generate::propose(
+        3,
+        gs_slitherlink::generate::Shape {
+            width: 6,
+            height: 6,
+            enclosed_per_mille: 400,
+        },
+        gs_slitherlink::generate::REMOVAL_BUDGET,
+    )
+    .expect("this seed makes a puzzle");
+    gs_slitherlink::publish::publish(
+        &candidate,
+        &AgreesWithAUniquePuzzle {
+            asked: core::cell::RefCell::new(0),
+        },
+        gs_slitherlink::solve::Budget::default(),
+        &Sha256,
+        &Ed25519Signer::new(key_id, private_key),
+    )
+    .expect("a uniquely solvable candidate with an agreeing solver publishes")
+    .package
+}
+
+/// Which lines the answer draws, in the order `Game::lines` reports them.
+fn the_loop(package: &[u8]) -> Vec<bool> {
+    let keys = {
+        let mut k = gs_crypto::TrustedKeys::none();
+        k.trust(
+            KEY_ID,
+            &Ed25519Signer::new(KEY_ID, &TEST_ONLY_PRIVATE_KEY).public_key(),
+        )
+        .expect("valid");
+        k
+    };
+    let clues = gs_web::load(package, &Sha256, &keys)
+        .expect("loads")
+        .slitherlink()
+        .expect("a Slitherlink package loads as a Slitherlink")
+        .clone();
+    let rules = gs_slitherlink::rules::Slitherlink::new(clues);
+    let state = gs_slitherlink::solve::solve(&rules, gs_slitherlink::solve::Budget::default())
+        .witness
+        .expect("a uniquely solvable puzzle has an answer");
+    rules
+        .geometry()
+        .edges()
+        .map(|edge| gs_slitherlink::loops::drawn_in(&state, edge))
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn a_loop_puzzle_opens_in_a_browser_and_says_which_game_it_is() {
+    let package = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+
+    assert_eq!(puzzle.family(), "slitherlink");
+    assert_eq!(puzzle.width(), 6);
+    assert_eq!(puzzle.height(), 6);
+    assert_eq!(
+        puzzle.band(),
+        "",
+        "this game has no difficulty levels yet, and a page must not invent one"
+    );
+    assert!(
+        puzzle.encoding().contains("loop"),
+        "the uniqueness claim names the encoding it was made under: {}",
+        puzzle.encoding()
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_loop_puzzle_can_be_played_and_solved_in_a_browser() {
+    let package = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let answer = the_loop(&package);
+    let puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+
+    let mut game = puzzle.play();
+    assert!(!game.is_solved(), "a new game is not a solved game");
+    assert_eq!(game.moves_made(), 0);
+    assert_eq!(game.dots_across(), 7, "one more dot than squares");
+    assert_eq!(game.dots_down(), 7);
+
+    let lines = game.lines();
+    assert_eq!(
+        lines.len(),
+        answer.len(),
+        "the board comes back one byte per line"
+    );
+    assert!(
+        lines.iter().all(|mark| *mark == Drawn::Unknown as u8),
+        "every line starts undecided"
+    );
+
+    // Where every line is, asked of the core rather than worked out here — which is the
+    // whole reason `line_places` exists.
+    let places = game.line_places();
+    assert_eq!(places.len(), lines.len() * 3);
+
+    for (i, drawn) in answer.iter().enumerate() {
+        if !drawn {
+            continue;
+        }
+        let side = if places[i * 3] == 0 {
+            Side::Across
+        } else {
+            Side::Down
+        };
+        assert!(
+            game.draw(side, places[i * 3 + 1], places[i * 3 + 2], Drawn::Yes),
+            "every line of the answer can be drawn"
+        );
+    }
+
+    assert!(game.is_solved(), "the real answer is a solved board");
+    assert_eq!(game.shape(), "the lines make one closed loop");
+    assert!(
+        game.numbers_not_met().is_empty(),
+        "a solved board meets every number"
+    );
+
+    // And taking one line back unsolves it, so nothing is remembering an answer.
+    assert!(game.undo());
+    assert!(!game.is_solved());
+    assert!(game.redo());
+    assert!(game.is_solved());
+}
+
+#[wasm_bindgen_test]
+fn a_nonogram_move_on_a_loop_puzzle_is_refused_in_words() {
+    // A page with a bug in it, in a browser. The quietest possible answer would have
+    // taken longest to find, so this one is a sentence.
+    let package = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    assert!(!game.mark(0, 0, Square::Filled), "not a move in this game");
+    let said = game.mark_and_say(0, 0, Square::Filled);
+    assert!(
+        said.contains("slitherlink"),
+        "the refusal should name the game: {said}"
+    );
+    assert!(game.board().is_empty(), "and there is no grid of squares");
+    assert_eq!(game.moves_made(), 0);
+}
+
+#[wasm_bindgen_test]
+fn a_loop_puzzle_saved_in_a_browser_comes_back_out_of_it() {
+    // The buffer knows nothing about any game. This is what that is worth.
+    forget_everything_saved();
+    let package = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.open(&package).expect("opens").fingerprint();
+
+    page.save_for_later(&package).expect("saved");
+    let back = page.next_saved().expect("a saved puzzle comes back");
+    assert_eq!(back.fingerprint(), fingerprint);
+    assert_eq!(back.family(), "slitherlink");
+
+    // And it is still playable, not merely still present.
+    let mut game = back.play();
+    assert!(game.draw(Side::Across, 0, 0, Drawn::Yes));
+    assert_eq!(game.moves_made(), 1);
+}
+
+#[wasm_bindgen_test]
+fn both_games_can_be_saved_on_one_device_at_once() {
+    // One buffer, one key list, one device. The thing being ruled out is a device that
+    // can hold five of one game or five of another but not two of each.
+    forget_everything_saved();
+    let picture = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let loop_puzzle = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+
+    page.save_for_later(&picture).expect("saved");
+    page.save_for_later(&loop_puzzle).expect("saved");
+    assert_eq!(packages_in_storage(), 2);
+
+    // Being handed one and having played it are different things, so the second puzzle
+    // comes out only once the first is marked played. Asking twice in a row would hand
+    // back the same puzzle twice, which is the buffer working, not failing.
+    let first = page.next_saved().expect("one");
+    let first_family = first.family();
+    page.mark_played(&first.fingerprint()).expect("recorded");
+
+    let second = page.next_saved().expect("the other");
+    let mut families = vec![first_family, second.family()];
+    families.sort();
+    assert_eq!(families, vec!["nonogram", "slitherlink"]);
+}
+
+#[wasm_bindgen_test]
+fn a_withdrawn_loop_puzzle_is_refused_and_deleted_like_any_other() {
+    // The withdrawal list does not know which game it names, and this is the proof.
+    forget_everything_saved();
+    let package = a_signed_loop_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+    let fingerprint = page.open(&package).expect("opens").fingerprint();
+    page.save_for_later(&package).expect("saved");
+    assert_eq!(packages_in_storage(), 1);
+
+    let list = a_withdrawal(
+        1,
+        &fingerprint,
+        Reason::NoAnswer,
+        &TEST_ONLY_PRIVATE_KEY,
+        KEY_ID,
+    );
+    page.accept_withdrawals(&list).expect("accepted");
+
+    assert_eq!(
+        packages_in_storage(),
+        0,
+        "a withdrawn puzzle goes out of storage, whichever game it is"
+    );
+    assert!(
+        page.open_for_play(&package).is_err(),
+        "and downloading it again is refused"
+    );
+    assert!(
+        page.open(&package).is_ok(),
+        "the package itself is still perfectly valid — it is withdrawn, not broken"
+    );
 }

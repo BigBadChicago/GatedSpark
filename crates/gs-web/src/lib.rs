@@ -36,12 +36,24 @@
 //! puzzle": a replay against different semantics is not a replay, and every claim in the
 //! report was made about rules this build may no longer implement. So both are checked,
 //! and a mismatch is a refusal rather than an attempt.
+//!
+//! # Why one page reads two games
+//!
+//! This page knows Nonogram and Slitherlink. The alternative was a second crate that
+//! opened packages, checked fingerprints and verified signatures all over again for the
+//! second game, and the trouble with that is not the duplication. It is that there would
+//! then be two answers to "is this package trustworthy", they would drift apart, and the
+//! one in front of a player would be whichever page they happened to open.
+//!
+//! So [`load`] is written once. What it does per game is exactly three things: match the
+//! family name, match that game's rules version, and hand the payload to that game's own
+//! reader. Everything before those three lines — the fingerprint, the signature, the key
+//! list — happens once, for every game, in the same code.
 
 use gs_core::content::{ContentId, Digest};
 use gs_core::package::{open, OpenError, SignatureVerifier};
 use gs_core::state::Dims;
-use gs_nonogram::clues::{Clues, DecodeError, Runs};
-use gs_nonogram::rules::{FAMILY, RULESET_VERSION};
+use gs_nonogram::clues::{Clues, Runs};
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
@@ -58,17 +70,30 @@ pub enum NotPlayable {
     /// The bytes are not a valid, correctly signed package. Carries the reason, which
     /// distinguishes a corrupted download from a signature this page will not accept.
     NotAValidPackage(OpenError),
-    /// A different game. Refused rather than attempted: this build has one family's
-    /// rules in it and cannot judge another's.
+    /// A game this page does not know. Refused rather than attempted: this build has
+    /// two families' rules in it and cannot judge a third's.
     WrongFamily { package_says: String },
     /// A version of the rules this build does not implement, in either direction. A
     /// newer one may rely on semantics this build lacks; an older one was verified
     /// under semantics this build no longer has.
     WrongRulesVersion { package_says: u32, we_have: u32 },
-    /// The package is sound and for this game, but its puzzle bytes do not decode.
-    /// That means a signed package disagrees with this build's own reader, which is a
-    /// bug somewhere rather than a damaged download — the signature already passed.
-    UnreadablePuzzle(DecodeError),
+    /// The package is sound and for a game this page knows, but its puzzle bytes do
+    /// not decode. That means a signed package disagrees with this build's own reader,
+    /// which is a bug somewhere rather than a damaged download — the signature already
+    /// passed.
+    UnreadablePuzzle(BoardProblem),
+}
+
+/// A board that would not read, from whichever game's reader refused it.
+///
+/// Two games, two readers, two error types, and no attempt to flatten them into one.
+/// A flattened message would have had to be written for whichever game it came from
+/// anyway, and the flattening would only have thrown away the detail needed to write
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoardProblem {
+    Nonogram(gs_nonogram::clues::DecodeError),
+    Slitherlink(gs_slitherlink::clues::DecodeError),
 }
 
 impl std::fmt::Display for NotPlayable {
@@ -79,8 +104,12 @@ impl std::fmt::Display for NotPlayable {
             }
             NotPlayable::WrongFamily { package_says } => write!(
                 f,
-                "this puzzle is a {package_says}, and this page only knows how to play {}",
-                FAMILY.0
+                "this puzzle is a {package_says}, and this page knows how to play {}",
+                KNOWN
+                    .iter()
+                    .map(|game| game.family)
+                    .collect::<Vec<_>>()
+                    .join(" and ")
             ),
             NotPlayable::WrongRulesVersion {
                 package_says,
@@ -138,15 +167,23 @@ fn plainly(why: &OpenError) -> String {
 }
 
 /// The same, for the board inside a package that was otherwise fine.
-fn board_plainly(why: &DecodeError) -> String {
+fn board_plainly(why: &BoardProblem) -> String {
     match why {
-        DecodeError::Truncated { field } => {
+        BoardProblem::Nonogram(why) => nonogram_board_plainly(why),
+        BoardProblem::Slitherlink(why) => slitherlink_board_plainly(why),
+    }
+}
+
+fn nonogram_board_plainly(why: &gs_nonogram::clues::DecodeError) -> String {
+    use gs_nonogram::clues::DecodeError as E;
+    match why {
+        E::Truncated { field } => {
             format!("the clue numbers stop part way through, at the {field}")
         }
-        DecodeError::TrailingBytes(extra) => {
+        E::TrailingBytes(extra) => {
             format!("there are {extra} bytes left over after the clue numbers")
         }
-        DecodeError::LineCountDisagreesWithDims {
+        E::LineCountDisagreesWithDims {
             axis,
             expected,
             found,
@@ -156,7 +193,74 @@ fn board_plainly(why: &DecodeError) -> String {
     }
 }
 
+fn slitherlink_board_plainly(why: &gs_slitherlink::clues::DecodeError) -> String {
+    use gs_slitherlink::board::SizeError;
+    use gs_slitherlink::clues::{CluesError, DecodeError as E};
+    match why {
+        E::Truncated { field } => {
+            format!("the numbers stop part way through, at the {field}")
+        }
+        E::TrailingBytes(extra) => {
+            format!("there are {extra} bytes left over after the numbers")
+        }
+        E::CountDisagreesWithSize { expected, found } => format!(
+            "the board is {expected} squares in size, and then gives {found} numbers for it"
+        ),
+        E::NotAClue { cell, byte } => format!(
+            "square {cell} holds {byte}, which is neither a number a square can have nor \
+             the mark for no number at all"
+        ),
+        E::Size(SizeError::TooSmall { width, height }) => {
+            format!("the board says it is {width} by {height}, which is not a board")
+        }
+        E::Size(SizeError::TooBig { edges }) => {
+            format!("the board says it has {edges} lines on it, which is more than can be played")
+        }
+        E::Clues(CluesError::WrongLength { expected, found }) => {
+            format!("the board wants {expected} numbers and gives {found}")
+        }
+        E::Clues(CluesError::TooLarge { cell, clue }) => {
+            format!("square {cell} says {clue} of its sides are used, and a square has only four")
+        }
+    }
+}
+
 impl std::error::Error for NotPlayable {}
+
+/// One game this page knows, and the one version of its rules this build implements.
+///
+/// A list rather than a pair of constants, so the refusal message can name the games
+/// without a second list to keep in step with this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownGame {
+    pub family: &'static str,
+    pub rules_version: u32,
+}
+
+/// Every game this page can play. Nothing outside this list is attempted.
+pub const KNOWN: [KnownGame; 2] = [
+    KnownGame {
+        family: gs_nonogram::rules::FAMILY.0,
+        rules_version: gs_nonogram::rules::RULESET_VERSION,
+    },
+    KnownGame {
+        family: gs_slitherlink::rules::FAMILY.0,
+        rules_version: gs_slitherlink::rules::RULESET_VERSION,
+    },
+];
+
+/// The board inside a package, in whichever game's own terms.
+///
+/// This is the only place the two games differ in this module. Everything else about a
+/// package — fingerprint, signature, key, level, encoding — is the same for both and is
+/// handled once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Board {
+    /// Numbers down the side and along the top, for a picture.
+    Nonogram(Clues),
+    /// A number in some squares, for one closed loop.
+    Slitherlink(gs_slitherlink::clues::Clues),
+}
 
 /// A puzzle that passed every check and can be drawn and played.
 ///
@@ -169,29 +273,75 @@ pub struct Playable {
     pub content_id: ContentId,
     /// Which key vouched for it. Already accepted by the key list.
     pub signed_by: String,
-    /// The level the game assigned, if it assigned one.
+    /// The level the game assigned, if it assigned one. Slitherlink assigns none, on
+    /// purpose, so this is `None` for every puzzle of it.
     pub band: Option<String>,
     /// What the uniqueness claim was made relative to. Carried because uniqueness is
     /// only ever true relative to an encoding, and a page that showed "one answer only"
     /// without it would be claiming more than was proved.
     pub encoding: String,
-    pub clues: Clues,
+    pub board: Board,
 }
 
 impl Playable {
+    /// Which game this is, in the same spelling the package uses.
+    #[must_use]
+    pub fn family(&self) -> &'static str {
+        match self.board {
+            Board::Nonogram(_) => gs_nonogram::rules::FAMILY.0,
+            Board::Slitherlink(_) => gs_slitherlink::rules::FAMILY.0,
+        }
+    }
+
+    /// The Nonogram board, or nothing if this is not a Nonogram.
+    ///
+    /// Returning nothing rather than a blank board of the wrong game: a page that drew
+    /// an empty grid for a Slitherlink would look like a Nonogram with no clues, which
+    /// is a puzzle, rather than like a mistake, which is what it is.
+    #[must_use]
+    pub fn nonogram(&self) -> Option<&Clues> {
+        match &self.board {
+            Board::Nonogram(clues) => Some(clues),
+            Board::Slitherlink(_) => None,
+        }
+    }
+
+    /// The Slitherlink board, or nothing if this is not a Slitherlink.
+    #[must_use]
+    pub fn slitherlink(&self) -> Option<&gs_slitherlink::clues::Clues> {
+        match &self.board {
+            Board::Slitherlink(clues) => Some(clues),
+            Board::Nonogram(_) => None,
+        }
+    }
+
+    /// The size of the grid a page draws: squares across and down, for either game.
     #[must_use]
     pub fn dims(&self) -> Dims {
-        self.clues.dims
+        match &self.board {
+            Board::Nonogram(clues) => clues.dims,
+            Board::Slitherlink(clues) => {
+                Dims::new(clues.geometry().width(), clues.geometry().height())
+            }
+        }
     }
 
+    /// The clue numbers down the left-hand side. Empty for a game that has none.
     #[must_use]
     pub fn row_clues(&self) -> &[Runs] {
-        &self.clues.rows
+        match &self.board {
+            Board::Nonogram(clues) => &clues.rows,
+            Board::Slitherlink(_) => &[],
+        }
     }
 
+    /// The clue numbers along the top. Empty for a game that has none.
     #[must_use]
     pub fn column_clues(&self) -> &[Runs] {
-        &self.clues.columns
+        match &self.board {
+            Board::Nonogram(clues) => &clues.columns,
+            Board::Slitherlink(_) => &[],
+        }
     }
 }
 
@@ -206,30 +356,46 @@ pub fn load<D: Digest, V: SignatureVerifier>(
     keys: &V,
 ) -> Result<Playable, NotPlayable> {
     // This one call recomputes the fingerprint over the bytes and checks the signature
-    // over the fingerprint. Everything below runs only because it returned Ok.
+    // over the fingerprint. Everything below runs only because it returned Ok. It is
+    // the same call for every game, which is the point of there being one loader.
     let opened = open(bytes, digest, keys).map_err(NotPlayable::NotAValidPackage)?;
 
-    if opened.manifest.family != FAMILY.0 {
+    let Some(game) = KNOWN
+        .iter()
+        .find(|game| game.family == opened.manifest.family)
+    else {
         return Err(NotPlayable::WrongFamily {
             package_says: opened.manifest.family.clone(),
         });
-    }
-    if opened.manifest.ruleset_version != RULESET_VERSION {
+    };
+    if opened.manifest.ruleset_version != game.rules_version {
         return Err(NotPlayable::WrongRulesVersion {
             package_says: opened.manifest.ruleset_version,
-            we_have: RULESET_VERSION,
+            we_have: game.rules_version,
         });
     }
 
-    let clues = Clues::from_canonical_bytes(&opened.manifest.payload)
-        .map_err(NotPlayable::UnreadablePuzzle)?;
+    // The one game-specific line. Each game's own reader decides whether its own bytes
+    // read, because a reader written here would be a second opinion about a format this
+    // page does not own.
+    let board = if game.family == gs_nonogram::rules::FAMILY.0 {
+        Board::Nonogram(
+            Clues::from_canonical_bytes(&opened.manifest.payload)
+                .map_err(|why| NotPlayable::UnreadablePuzzle(BoardProblem::Nonogram(why)))?,
+        )
+    } else {
+        Board::Slitherlink(
+            gs_slitherlink::clues::Clues::from_canonical_bytes(&opened.manifest.payload)
+                .map_err(|why| NotPlayable::UnreadablePuzzle(BoardProblem::Slitherlink(why)))?,
+        )
+    };
 
     Ok(Playable {
         content_id: opened.content_id,
         signed_by: opened.key_id,
         band: opened.manifest.band,
         encoding: opened.manifest.encoding,
-        clues,
+        board,
     })
 }
 

@@ -1,37 +1,16 @@
-//! Playing a loaded puzzle.
+//! Playing a loaded Nonogram.
 //!
-//! # The one rule this module exists to keep
-//!
-//! **It decides nothing.** Every question a player's move raises is answered by
-//! `gs-core` and `gs-nonogram`:
-//!
-//! - whether a move is legal → `Ruleset::transition`
-//! - what the board becomes → `Delta::apply`, through the timeline
-//! - whether undo and redo are possible → `Timeline`
-//! - **whether the puzzle is solved → `Ruleset::is_solved`**
-//!
-//! The last one is the whole reason this module is thin. Working out for itself whether
-//! a board is finished is the single easiest mistake to make here, and the most
-//! expensive: there would be two answers to that question, they would disagree one day,
-//! and the wrong one would be the one in front of the player. `Nonogram::is_solved`
-//! checks the clues — not a stored answer — and that is the only definition of solved
-//! this project has.
-//!
-//! So nothing below computes anything about the board. It holds a timeline, hands moves
-//! to it, and reads answers out.
-//!
-//! # Why a session owns its puzzle
-//!
-//! A [`Session`] is built from a [`Playable`](crate::Playable), which can only come from
-//! [`load`](crate::load). You cannot start a session on a puzzle whose signature was not
-//! checked, because there is no other way to get the thing a session needs.
+//! The rules of this module are the ones in [`crate::play`], which every game's session
+//! follows: it decides nothing, and every question a move raises is answered by
+//! `gs-core` and `gs-nonogram`.
 
 use gs_core::hash::StateHash;
 use gs_core::ruleset::Ruleset;
 use gs_core::state::{Cell, State};
-use gs_core::timeline::{Timeline, TimelineError};
+use gs_core::timeline::Timeline;
 use gs_nonogram::rules::{mark_of, Action, Nonogram, EMPTY, FILLED};
 
+use super::{why, NoChange};
 use crate::Playable;
 
 /// What a player can do to a square.
@@ -67,52 +46,6 @@ impl Mark {
     }
 }
 
-/// Why a move did nothing.
-///
-/// Every one of these is ordinary during play, not an error in the usual sense: tapping
-/// a square that is already filled, or undoing at the start. They are reported rather
-/// than ignored so a page can tell the difference between "that did nothing" and "that
-/// worked".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoChange {
-    /// The square is already marked that way.
-    AlreadyThatWay,
-    /// There is no such square on this board.
-    NoSuchSquare,
-    /// Nothing left to undo.
-    AtTheStart,
-    /// Nothing left to redo.
-    NothingToRedo,
-    /// The rules refused the move for a reason of their own. Kept distinct from the
-    /// cases above: those are expected, and this one means something is wrong.
-    TheRulesRefused,
-}
-
-impl std::fmt::Display for NoChange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let said = match self {
-            NoChange::AlreadyThatWay => "that square is already marked that way",
-            NoChange::NoSuchSquare => "there is no such square on this board",
-            NoChange::AtTheStart => "there is nothing left to undo",
-            NoChange::NothingToRedo => "there is nothing to redo",
-            NoChange::TheRulesRefused => "the rules did not allow that move",
-        };
-        f.write_str(said)
-    }
-}
-
-impl std::error::Error for NoChange {}
-
-fn why(e: TimelineError) -> NoChange {
-    match e {
-        TimelineError::AtRoot => NoChange::AtTheStart,
-        TimelineError::NoRedo => NoChange::NothingToRedo,
-        TimelineError::Illegal(gs_core::ruleset::Illegal::NoOp) => NoChange::AlreadyThatWay,
-        TimelineError::Illegal(gs_core::ruleset::Illegal::OutOfBounds) => NoChange::NoSuchSquare,
-        _ => NoChange::TheRulesRefused,
-    }
-}
-
 /// One person playing one puzzle.
 ///
 /// Holds the puzzle's rules and a timeline of everything done so far. Every move, undo
@@ -125,20 +58,35 @@ pub struct Session {
 }
 
 impl Session {
-    /// Start playing a puzzle that passed every check.
+    /// Start playing a Nonogram that passed every check, or nothing if it is not a
+    /// Nonogram at all.
+    ///
+    /// Nothing rather than an empty board: a session of the wrong game cannot be made
+    /// here, and a blank board of this game would look like a puzzle rather than like a
+    /// mistake. A caller that does not already know which game it has asks
+    /// [`Playable::family`], or uses [`crate::play::Session::start`], which takes any
+    /// game and always succeeds.
     ///
     /// The board starts blank — every square undecided — which is a real state and not
     /// an absence of one.
     #[must_use]
-    pub fn start(puzzle: Playable) -> Self {
-        let rules = Nonogram::new(puzzle.clues.clone());
-        let blank = State::blank(puzzle.clues.dims);
+    pub fn start(puzzle: Playable) -> Option<Self> {
+        let clues = puzzle.nonogram()?;
+        let rules = Nonogram::new(clues.clone());
+        let blank = State::blank(clues.dims);
         let timeline = Timeline::new(&rules, blank);
-        Session {
+        Some(Session {
             puzzle,
             rules,
             timeline,
-        }
+        })
+    }
+
+    /// The clue numbers, which a Nonogram session always has.
+    fn clues(&self) -> &gs_nonogram::clues::Clues {
+        self.puzzle
+            .nonogram()
+            .expect("a Nonogram session can only be started on a Nonogram")
     }
 
     #[must_use]
@@ -169,7 +117,7 @@ impl Session {
     /// valid index somewhere else on the board, which is the bug this method exists to
     /// not have.
     pub fn mark_at(&mut self, row: u16, column: u16, mark: Mark) -> Result<(), NoChange> {
-        let dims = self.puzzle.clues.dims;
+        let dims = self.clues().dims;
         if row >= dims.height || column >= dims.width {
             return Err(NoChange::NoSuchSquare);
         }
@@ -200,7 +148,7 @@ impl Session {
 
     #[must_use]
     pub fn mark_at_of(&self, row: u16, column: u16) -> Mark {
-        let dims = self.puzzle.clues.dims;
+        let dims = self.clues().dims;
         if row >= dims.height || column >= dims.width {
             return Mark::Unknown;
         }
