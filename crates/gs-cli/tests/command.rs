@@ -244,9 +244,19 @@ fn a_level_that_does_not_exist_lists_the_ones_that_do() {
         &key,
         "--level",
         "impossible",
+        // A solver that cannot exist, on purpose. A bad flag must be reported as a bad
+        // flag whether or not this machine has a solver installed, and without this the
+        // test only checked the machines that have one. It is here because the real
+        // build caught exactly that.
+        "--solver",
+        &temp.text("no-solver-here"),
     ]);
     assert!(!out.status.success());
     let message = stderr(&out);
+    assert!(
+        !message.contains("will not run"),
+        "a bad flag must be reported before a missing solver is: {message}"
+    );
     assert!(message.contains("no such level: impossible"), "{message}");
     assert!(
         message.contains("gentle"),
@@ -266,6 +276,8 @@ fn a_game_that_does_not_exist_lists_the_ones_that_do() {
         &key,
         "--family",
         "sudoku",
+        "--solver",
+        &temp.text("no-solver-here"),
     ]);
     assert!(!out.status.success());
     let message = stderr(&out);
@@ -292,6 +304,8 @@ fn a_flag_that_belongs_to_the_other_game_is_refused_rather_than_ignored() {
         "slitherlink",
         "--level",
         "gentle",
+        "--solver",
+        &temp.text("no-solver-here"),
     ]);
     assert!(!level.status.success());
     let message = stderr(&level);
@@ -309,6 +323,8 @@ fn a_flag_that_belongs_to_the_other_game_is_refused_rather_than_ignored() {
         &key,
         "--size",
         "7",
+        "--solver",
+        &temp.text("no-solver-here"),
     ]);
     assert!(!size.status.success());
     assert!(

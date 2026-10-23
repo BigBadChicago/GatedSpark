@@ -275,10 +275,16 @@ fn fill(args: &[String]) -> Result<(), String> {
     let max_seeds: u64 = args.number("max-seeds", 20_000)?;
     let seconds: u32 = args.number("timeout", 60)?;
     let family = args.get("family").unwrap_or("nonogram");
-    // Checked before anything slow starts. A flag that belongs to the other game is a
-    // mistake about what is being made, not a detail to ignore: `--level easy` on a
-    // Slitherlink run would otherwise quietly make puzzles of no particular
-    // difficulty, which is exactly what the flag was asking not to happen.
+    // Every flag is checked here, before anything slow starts, so that a flag spelt
+    // wrong is reported as a flag spelt wrong rather than as whatever the run does
+    // next. The order matters: a missing solver is a fair thing to be told about, but
+    // not instead of being told that `--level impossible` is not a level.
+    //
+    // A flag that belongs to the other game is a mistake about what is being made, not
+    // a detail to ignore: `--level easy` on a Slitherlink run would otherwise quietly
+    // make puzzles of no particular difficulty, which is exactly what the flag was
+    // asking not to happen.
+    let mut bands: Vec<&'static Band> = Vec::new();
     match family {
         "nonogram" => {
             for flag in ["size", "enclosed"] {
@@ -286,6 +292,7 @@ fn fill(args: &[String]) -> Result<(), String> {
                     return Err(format!("--{flag} is for slitherlink, not nonogram"));
                 }
             }
+            bands = chosen_bands(args.get("level"))?;
         }
         "slitherlink" => {
             if args.get("level").is_some() {
@@ -338,7 +345,6 @@ fn fill(args: &[String]) -> Result<(), String> {
         );
     }
 
-    let bands = chosen_bands(args.get("level"))?;
     let mut stored = 0usize;
     let mut refused = 0usize;
     let mut undecided = 0usize;
