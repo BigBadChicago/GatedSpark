@@ -104,23 +104,55 @@ pub(crate) fn why(e: TimelineError) -> NoChange {
 /// worth defending with bookkeeping that follows a player around.
 ///
 /// Two things are deliberately not charged for: a hint that could say nothing, and the
-/// same hint again. Asking twice without having marked anything gets the same sentence
-/// back for nothing, because nothing has changed and there is nothing new to say.
+/// same hint again, which can only happen when it had nothing to mark.
 pub const HINTS_PER_PUZZLE: u8 = 3;
 
-/// Where a hint is pointing, in the one shape a page can draw whichever game it has.
+/// How big each hint is, in the order they are given.
+///
+/// The hints grow: the first settles one square or line, the second half a row or
+/// column, the third a whole one. The project owner asked for exactly this, and the
+/// shape of it is the point — somebody a little stuck gets a nudge, and somebody
+/// thoroughly stuck gets enough to carry on with.
+///
+/// A list rather than a rule, so that the sizes and the allowance cannot disagree:
+/// [`HINTS_PER_PUZZLE`] is this list's length, and a test holds them together.
+pub const HINT_SIZES: [HintSize; 3] = [HintSize::One, HintSize::HalfALine, HintSize::AWholeLine];
+
+/// How much of the board one hint settles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointsAt {
+pub enum HintSize {
+    /// One square, or one line.
+    One,
+    /// Half a row or column.
+    HalfALine,
+    /// A whole row or column.
+    AWholeLine,
+}
+
+impl HintSize {
+    /// Which size the hint after `spent` hints should be.
+    ///
+    /// Past the end of the list it stays at the largest. That cannot happen while the
+    /// allowance and the list are the same length, and it is the right answer if they
+    /// ever are not.
+    #[must_use]
+    pub fn after(spent: u8) -> HintSize {
+        *HINT_SIZES
+            .get(usize::from(spent))
+            .unwrap_or(&HintSize::AWholeLine)
+    }
+}
+
+/// One place on a board, in the one shape a page can draw whichever game it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
     /// One square of a Nonogram, counting from 0 at the top left.
     Square { row: u16, column: u16 },
     /// One line of a Slitherlink: which way it runs, and the dot it starts from.
     Line { across: bool, column: u16, row: u16 },
-    /// Nowhere in particular. Said of a hint about a whole row, or a whole square's
-    /// number, where highlighting one place would point at the wrong thing.
-    Nowhere,
 }
 
-/// A hint, ready to show.
+/// A hint, after it has been marked on the board.
 ///
 /// The sentence comes from the game's own crate, where the reasoning is. Nothing here
 /// writes it, for the same reason nothing here decides whether a board is finished.
@@ -128,8 +160,10 @@ pub enum PointsAt {
 pub struct Advice {
     /// What to tell the player.
     pub says: String,
-    /// Where to point, if anywhere.
-    pub points_at: PointsAt,
+    /// The places the hint marked, so a page can show what just changed. Empty when
+    /// there was nothing to mark: a hint saying a row cannot work marks nothing,
+    /// because which square in it is wrong is the player's to decide.
+    pub filled: Vec<Place>,
     /// How many hints are left on this puzzle after this one.
     pub hints_left: u8,
 }
@@ -209,15 +243,18 @@ impl Session {
         }
     }
 
-    /// The next thing the player could work out, and what it costs them.
+    /// Work the next part of the puzzle out for the player, and mark it in.
     ///
     /// Worked out on the device from the clues, by the game's own reasoning. No answer
     /// is stored or fetched, which is why this works with no signal and why nothing
     /// published alongside a puzzle has to be kept secret.
     ///
-    /// **It makes no move.** The puzzle, its clues and its one answer are the same
-    /// whether a hint was asked for or not, which is what keeps this help rather than a
-    /// change to the game.
+    /// The hints grow: one square, then half a row or column, then a whole one. See
+    /// [`HINT_SIZES`].
+    ///
+    /// **The puzzle itself does not change.** A hint marks squares the clues already
+    /// decide, through the ordinary rules, so every mark it makes is one the player
+    /// could have made and can take back with undo.
     pub fn hint(&mut self) -> Result<Advice, NoHint> {
         match self {
             Session::Nonogram(game) => game.hint(),

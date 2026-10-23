@@ -157,16 +157,33 @@ if (!details.fingerprint.startsWith(details.name.slice(0, 8))) await fail('the f
 // Hints, on a blank picture board
 // ---------------------------------------------------------------------------
 //
-// Driven before anything is tapped, because that is when a player needs one. Three
+// Driven before anything is tapped, because that is when a player needs one. Four
 // things are checked that only the real page can show: that the hint arrives at all in
-// a browser, that what it names agrees with the signed answer sitting beside the
-// package, and that it is announced and reachable without a mouse.
+// a browser, that it fills the squares in, that every square it filled agrees with the
+// signed answer sitting beside the package, and that it is announced and reachable
+// without a mouse.
 //
-// The agreement check is the one that matters. The page has no answer in it; the hint is
-// worked out from the clue numbers alone. If it ever disagrees with the answer the
-// solver vouched for, the hint is lying to the player and this stops the build.
+// The agreement check is the one that matters, and it matters more now than it did when
+// a hint named one square: a hint that fills in a whole row has a dozen chances to be
+// wrong instead of one. The page has no answer in it; the hint is worked out from the
+// clue numbers alone. If it ever disagrees with the answer the solver vouched for, the
+// hint is lying to the player and this stops the build.
+//
+// Marks on the page: 0 is filled, 1 is crossed out, 2 is undecided.
 {
   const stored = filledSquares(`${WWW}/store/${details.name}/witness.bin`);
+  const isFilled = (row, column) => stored.filled.some(([r, c]) => r === row && c === column);
+
+  // Everything a hint filled in, checked against the signed answer. Returns what was
+  // wrong, or nothing.
+  const disagreements = (squares) =>
+    squares
+      .filter(([row, column, mark]) => (mark === 0) !== isFilled(row, column))
+      .map(([row, column, mark]) =>
+        `row ${row + 1}, column ${column + 1} was ${mark === 0 ? 'filled in' : 'crossed out'} ` +
+          `and the signed answer says ${isFilled(row, column) ? 'filled' : 'blank'}`
+      );
+
   const before = await page.evaluate(() => ({
     offered: window.gatedspark.hintOffered(),
     left: window.gatedspark.hintsLeftSaid(),
@@ -183,7 +200,7 @@ if (!details.fingerprint.startsWith(details.name.slice(0, 8))) await fail('the f
     window.gatedspark.hint();
     return {
       said: window.gatedspark.hintSaid(),
-      at: window.gatedspark.hintedSquare(),
+      ringed: window.gatedspark.hintedSquares(),
       left: window.gatedspark.hintsLeftSaid(),
       focused: window.gatedspark.focusIsOnTheHint(),
       moves: window.gatedspark.movesMade(),
@@ -192,94 +209,123 @@ if (!details.fingerprint.startsWith(details.name.slice(0, 8))) await fail('the f
   });
   console.log('first hint ' + JSON.stringify(first));
   if (!first.said) await fail('the hint button said nothing', 'hints');
-  if (!/because/.test(first.said)) await fail('a hint should say why: ' + first.said, 'hints');
+  if (!/because|from/.test(first.said)) await fail('a hint should say why: ' + first.said, 'hints');
   if (/[a-z][A-Z]|_/.test(first.said)) await fail('a hint is showing a code name: ' + first.said, 'hints');
-  if (!first.at) await fail('the hint named no square to look at', 'hints');
+  if (first.ringed.length !== 1) {
+    await fail('the first hint should settle one square, not ' + first.ringed.length, 'hints');
+  }
   if (!/2 hints left/.test(first.left)) await fail('the hint was not counted: ' + first.left, 'hints');
-  if (!first.focused) await fail('the keyboard was not moved to the hinted square', 'hints');
-  if (first.moves !== 0) await fail('asking for a hint counted as a move', 'hints');
+  if (!first.focused) await fail('the keyboard was not moved to a square the hint filled in', 'hints');
+  if (first.moves !== 1) await fail('a hint that filled one square made ' + first.moves + ' moves', 'hints');
   if (first.solved) await fail('a hint solved the puzzle, which is not what a hint is for', 'hints');
-
-  // The square it named is filled in the signed answer, or crossed out in it, and the
-  // sentence says which. Either is a true hint; naming the wrong one is not.
-  const [row, column] = first.at;
-  const inTheAnswer = stored.filled.some(([r, c]) => r === row && c === column);
-  const saysFilled = /has to be filled/.test(first.said);
-  const saysBlank = /has to be blank/.test(first.said);
-  if (!saysFilled && !saysBlank) {
-    await fail('the hint named a square without saying what it is: ' + first.said, 'hints');
+  if (first.ringed.some(([, , mark]) => mark === 2)) {
+    await fail('a hint ringed a square it left undecided', 'hints');
   }
-  if (saysFilled !== inTheAnswer) {
-    await fail(
-      `the hint says row ${row + 1}, column ${column + 1} ${saysFilled ? 'is filled' : 'is blank'} ` +
-        `and the signed answer says otherwise`,
-      'hints'
-    );
-  }
+  for (const wrong of disagreements(first.ringed)) await fail('the first hint is wrong: ' + wrong, 'hints');
   await page.screenshot({ path: OUT + '/hint.png', fullPage: true });
 
-  // Tapping Hint again without having marked anything is free: the board has not
-  // changed, so there is nothing new to say and nothing to charge for.
-  const twice = await page.evaluate(() => {
-    window.gatedspark.hint();
-    return { said: window.gatedspark.hintSaid(), left: window.gatedspark.hintsLeftSaid() };
-  });
-  console.log('the same hint again ' + JSON.stringify(twice));
-  if (twice.said !== first.said) await fail('asking again said something else: ' + twice.said, 'hints');
-  if (!/2 hints left/.test(twice.left)) await fail('a repeated hint was charged for: ' + twice.left, 'hints');
-
-  // Marking a square takes the ring off, so the player is not left looking at an
-  // answered hint. The sentence stays, because it is worth reading twice.
-  const afterMarking = await page.evaluate(() => {
-    const at = window.gatedspark.hintedSquare();
-    if (!at) return { skipped: true };
-    window.gatedspark.tap(at[0], at[1]);
-    const still = { at: window.gatedspark.hintedSquare(), said: window.gatedspark.hintSaid() };
-    window.gatedspark.undo();
-    return still;
-  });
-  console.log('after marking the hinted square ' + JSON.stringify(afterMarking));
-  if (afterMarking.skipped) await fail('no square was ringed to mark', 'hints');
-  if (afterMarking.at) await fail('the hint ring stayed on a square the player has answered', 'hints');
-  if (!afterMarking.said) await fail('the hint sentence vanished as soon as the player moved', 'hints');
-
-  // Three and no more. Each one is acted on, so each is a new hint rather than the same
-  // sentence again, and the button goes away when the allowance is gone.
-  const spent = await page.evaluate(() => {
-    const act = () => {
-      const said = window.gatedspark.hintSaid();
-      const at = window.gatedspark.hintedSquare();
-      if (!at) return;
-      // Tap round to what the hint said: once for filled, twice for crossed out.
-      window.gatedspark.tap(at[0], at[1]);
-      if (/has to be blank/.test(said)) window.gatedspark.tap(at[0], at[1]);
-    };
-    window.gatedspark.hint(); // the ring back after the undo above, free
-    act();
-    window.gatedspark.hint();
-    act();
-    window.gatedspark.hint();
-    act();
+  // The hints grow: one square, then half a row or column, then a whole one. Each one
+  // is checked against the signed answer in full, because a bigger hint is a bigger
+  // chance to be wrong.
+  const rest = await page.evaluate(() => {
+    const got = [];
+    for (let i = 0; i < 2; i += 1) {
+      window.gatedspark.hint();
+      got.push({
+        said: window.gatedspark.hintSaid(),
+        ringed: window.gatedspark.hintedSquares(),
+        left: window.gatedspark.hintsLeftSaid(),
+        moves: window.gatedspark.movesMade(),
+      });
+    }
     return {
+      got,
       left: window.gatedspark.hintsLeftSaid(),
       offered: window.gatedspark.hintOffered(),
       moves: window.gatedspark.movesMade(),
+      solved: window.gatedspark.isSolved(),
     };
   });
-  console.log('after three hints ' + JSON.stringify(spent));
-  if (!/No hints left/.test(spent.left)) await fail('the count did not run down to nothing: ' + spent.left, 'hints');
-  if (spent.offered) await fail('the hint button is still offered with no hints left', 'hints');
-  if (spent.moves < 3) await fail('doing what three hints said should be at least three moves, not ' + spent.moves, 'hints');
+  console.log('the other two hints ' + JSON.stringify(rest.got.map((h) => ({ n: h.ringed.length, said: h.said }))));
+
+  // A picture of the biggest hint as well as the smallest, because the thing worth
+  // looking at is how much of the board a whole-line hint fills in.
+  await page.screenshot({ path: OUT + '/hint-a-whole-line.png', fullPage: true });
+
+  const sizes = [first.ringed.length, ...rest.got.map((hint) => hint.ringed.length)];
+  if (!(sizes[1] > sizes[0])) await fail('the second hint is no bigger than the first: ' + sizes, 'hints');
+  if (!(sizes[2] > sizes[1])) await fail('the third hint is no bigger than the second: ' + sizes, 'hints');
+  for (const hint of rest.got) {
+    if (/[a-z][A-Z]|_/.test(hint.said)) await fail('a hint is showing a code name: ' + hint.said, 'hints');
+    if (hint.ringed.some(([, , mark]) => mark === 2)) {
+      await fail('a hint ringed a square it left undecided', 'hints');
+    }
+    for (const wrong of disagreements(hint.ringed)) await fail('a hint is wrong: ' + wrong, 'hints');
+  }
+  if (!/1 hint left/.test(rest.got[0].left)) await fail('the second hint was not counted: ' + rest.got[0].left, 'hints');
+  if (!/No hints left/.test(rest.left)) await fail('the count did not run down to nothing: ' + rest.left, 'hints');
+  if (rest.offered) await fail('the hint button is still offered with no hints left', 'hints');
+  if (rest.solved) await fail('three hints finished the puzzle, which is giving the answer away', 'hints');
+
+  // Every square a hint filled in is a move of the player's own, so the move count and
+  // the squares filled have to agree exactly.
+  const total = sizes.reduce((sum, n) => sum + n, 0);
+  if (rest.moves !== total) {
+    await fail(`three hints filled ${total} squares and made ${rest.moves} moves`, 'hints');
+  }
+
+  // There is no fourth. The refusal is shown before the player reaches for it rather
+  // than after: the count reads "No hints left" and the button is switched off, which
+  // both checks above already read. What is checked here is that pressing it anyway
+  // does nothing at all, because a switched-off button that still works would be the
+  // worst of both.
+  const fourth = await page.evaluate(() => {
+    window.gatedspark.hint();
+    return { said: window.gatedspark.hintSaid(), moves: window.gatedspark.movesMade() };
+  });
+  if (fourth.moves !== total) await fail('a fourth hint still marked the board', 'hints');
+  if (fourth.said !== rest.got[1].said) {
+    await fail('a fourth hint said something new: ' + fourth.said, 'hints');
+  }
+
+  // Tapping a square a hint filled in takes its ring off, so the player is not left
+  // looking at an answered hint. The sentence stays, because it is worth reading twice.
+  const afterTapping = await page.evaluate(() => {
+    const ringed = window.gatedspark.hintedSquares();
+    if (ringed.length === 0) return { skipped: true };
+    const [row, column] = ringed[0];
+    window.gatedspark.tap(row, column);
+    const still = {
+      ringed: window.gatedspark.hintedSquares().length,
+      was: ringed.length,
+      said: window.gatedspark.hintSaid(),
+    };
+    window.gatedspark.undo();
+    return still;
+  });
+  console.log('after tapping a hinted square ' + JSON.stringify(afterTapping));
+  if (afterTapping.skipped) await fail('no square was ringed after three hints', 'hints');
+  if (afterTapping.ringed >= afterTapping.was) {
+    await fail('the hint ring stayed on a square the player has answered', 'hints');
+  }
+  if (!afterTapping.said) await fail('the hint sentence vanished as soon as the player moved', 'hints');
 
   // Put the board back as it was found. The checks below this one start from an
   // untouched board on purpose — the keyboard check needs a square it can call blank —
-  // and hints are help, so taking the help back has to leave no trace.
+  // and hints are help, so taking the help back has to leave no trace. This is also
+  // the check that a hint's marks are ordinary moves: if any of them were written
+  // round the back, undo would not reach them.
   const cleared = await page.evaluate(() => {
     while (window.gatedspark.movesMade() > 0) window.gatedspark.undo();
-    return { moves: window.gatedspark.movesMade(), ringed: window.gatedspark.hintedSquare() };
+    return {
+      moves: window.gatedspark.movesMade(),
+      ringed: window.gatedspark.hintedSquares().length,
+      board: window.gatedspark.boardAt(0, 0),
+    };
   });
   if (cleared.moves !== 0) await fail('the hint checks left marks on the board', 'hints');
-  if (cleared.ringed) await fail('a hint ring was left on the board', 'hints');
+  if (cleared.ringed !== 0) await fail('a hint ring was left on the board', 'hints');
+  if (cleared.board !== 2) await fail('undoing every hint left a square marked', 'hints');
 }
 
 // A few taps, so the picture shows a part-played board rather than an empty one, and so
@@ -728,58 +774,121 @@ if (!LOOP) {
   if (!/no lines are drawn yet/.test(loop.shape)) await fail('a blank board should say so: ' + loop.shape, 'loop-shape');
   if (loop.solved) await fail('it said solved before a single tap', 'loop-wrongly-solved');
 
-  // Hints on a blank loop board. The same three questions as for the picture game, and
-  // the same one that matters: what the hint names has to agree with the signed answer,
-  // which the page does not have and the hint never reads.
+  // Hints on a blank loop board. The same four questions as for the picture game, and
+  // the same one that matters: every line a hint draws in has to agree with the signed
+  // answer, which the page does not have and the hint never reads.
+  //
+  // Lines on the page: 0 is drawn, 1 is ruled out, 2 is undecided.
   {
     const stored = drawnLines(`${WWW}/store/${LOOP}/witness.bin`);
+
+    // Which line is which, in the core's own order, so this check does no numbering of
+    // its own. The answer is a list of line numbers in that same order.
+    const places = await page.evaluate(() => Array.from(window.gatedspark.linePlaces()));
+    const numberOf = (side, column, row) => {
+      for (let i = 0; i < places.length; i += 3) {
+        if (places[i] === side && places[i + 1] === column && places[i + 2] === row) return i / 3;
+      }
+      return -1;
+    };
+    const disagreements = (lines) => {
+      const wrong = [];
+      for (const [side, column, row, drawn] of lines) {
+        const which = numberOf(side, column, row);
+        if (which < 0) {
+          wrong.push('a hint filled in a line the page does not have');
+          continue;
+        }
+        const inTheLoop = stored.drawn.includes(which);
+        if ((drawn === 0) !== inTheLoop) {
+          wrong.push(
+            `line ${which} was ${drawn === 0 ? 'drawn in' : 'ruled out'} ` +
+              `and the signed answer says it is ${inTheLoop ? 'part of the loop' : 'not'}`
+          );
+        }
+      }
+      return wrong;
+    };
+
     const hinted = await page.evaluate(() => {
       const before = window.gatedspark.hintsLeftSaid();
-      window.gatedspark.hint();
+      const got = [];
+      for (let i = 0; i < 3; i += 1) {
+        window.gatedspark.hint();
+        got.push({
+          said: window.gatedspark.hintSaid(),
+          ringed: window.gatedspark.hintedLines(),
+          left: window.gatedspark.hintsLeftSaid(),
+          moves: window.gatedspark.movesMade(),
+        });
+      }
       return {
         before,
-        said: window.gatedspark.hintSaid(),
-        at: window.gatedspark.hintedLine(),
-        left: window.gatedspark.hintsLeftSaid(),
+        got,
         focused: window.gatedspark.focusIsOnTheHint(),
+        left: window.gatedspark.hintsLeftSaid(),
+        offered: window.gatedspark.hintOffered(),
         moves: window.gatedspark.movesMade(),
-        places: window.gatedspark.linePlaces(),
+        solved: window.gatedspark.isSolved(),
       };
     });
-    console.log('loop hint ' + JSON.stringify({ ...hinted, places: hinted.places.length }));
-    if (!/3 hints left/.test(hinted.before)) await fail('a fresh loop puzzle should offer three hints: ' + hinted.before, 'loop-hints');
-    if (!hinted.said) await fail('the hint button said nothing on a loop puzzle', 'loop-hints');
-    if (!/because/.test(hinted.said)) await fail('a hint should say why: ' + hinted.said, 'loop-hints');
-    if (/[a-z][A-Z]|_/.test(hinted.said)) await fail('a hint is showing a code name: ' + hinted.said, 'loop-hints');
-    if (!hinted.at) await fail('the hint named no line to look at', 'loop-hints');
-    if (!/2 hints left/.test(hinted.left)) await fail('the hint was not counted: ' + hinted.left, 'loop-hints');
-    if (!hinted.focused) await fail('the keyboard was not moved to the hinted line', 'loop-hints');
-    if (hinted.moves !== 0) await fail('asking for a hint counted as a move', 'loop-hints');
+    const sizes = hinted.got.map((hint) => hint.ringed.length);
+    console.log('loop hints ' + JSON.stringify({ sizes, said: hinted.got.map((h) => h.said) }));
 
-    // Which line it named, in the core's own order, so it can be looked up in the
-    // answer without this check working out any numbering of its own.
-    const [side, column, row] = hinted.at;
-    let which = -1;
-    for (let i = 0; i < hinted.places.length; i += 3) {
-      if (hinted.places[i] === side && hinted.places[i + 1] === column && hinted.places[i + 2] === row) {
-        which = i / 3;
-        break;
+    if (!/3 hints left/.test(hinted.before)) await fail('a fresh loop puzzle should offer three hints: ' + hinted.before, 'loop-hints');
+    if (!/2 hints left/.test(hinted.got[0].left)) await fail('the first hint was not counted: ' + hinted.got[0].left, 'loop-hints');
+    if (!/No hints left/.test(hinted.left)) await fail('the count did not run down to nothing: ' + hinted.left, 'loop-hints');
+    if (hinted.offered) await fail('the hint button is still offered with no hints left', 'loop-hints');
+    if (!hinted.focused) await fail('the keyboard was not moved to a line the hint filled in', 'loop-hints');
+    if (hinted.solved) await fail('three hints finished the loop puzzle, which is giving the answer away', 'loop-hints');
+
+    for (const hint of hinted.got) {
+      if (!hint.said) await fail('the hint button said nothing on a loop puzzle', 'loop-hints');
+      if (!/because|from/.test(hint.said)) await fail('a hint should say why: ' + hint.said, 'loop-hints');
+      if (/[a-z][A-Z]|_/.test(hint.said)) await fail('a hint is showing a code name: ' + hint.said, 'loop-hints');
+      if (hint.ringed.length === 0) await fail('a hint filled no lines in: ' + hint.said, 'loop-hints');
+      if (hint.ringed.some(([, , , drawn]) => drawn === 2)) {
+        await fail('a hint ringed a line it left undecided', 'loop-hints');
       }
+      for (const wrong of disagreements(hint.ringed)) await fail('a hint is wrong: ' + wrong, 'loop-hints');
     }
-    if (which < 0) await fail('the hint pointed at a line the page does not have', 'loop-hints');
-    const inTheLoop = stored.drawn.includes(which);
-    const saysDrawn = /is part of the loop/.test(hinted.said);
-    const saysNot = /is not part of the loop/.test(hinted.said);
-    if (!saysDrawn && !saysNot) {
-      await fail('the hint named a line without saying whether to draw it: ' + hinted.said, 'loop-hints');
+
+    // The hints grow: one line, then half a row or column of them, then a whole one.
+    if (sizes[0] !== 1) await fail('the first hint should settle one line, not ' + sizes[0], 'loop-hints');
+    if (!(sizes[1] > sizes[0])) await fail('the second hint is no bigger than the first: ' + sizes, 'loop-hints');
+    if (!(sizes[2] > sizes[1])) await fail('the third hint is no bigger than the second: ' + sizes, 'loop-hints');
+
+    // Every line a hint drew is a move of the player's own, so the two have to agree.
+    const total = sizes.reduce((sum, n) => sum + n, 0);
+    if (hinted.moves !== total) {
+      await fail(`three hints filled ${total} lines and made ${hinted.moves} moves`, 'loop-hints');
     }
-    if (saysDrawn !== inTheLoop) {
-      await fail(
-        `the hint says that line ${saysDrawn ? 'is' : 'is not'} part of the loop and the signed answer says otherwise`,
-        'loop-hints'
-      );
-    }
+
     await page.screenshot({ path: OUT + '/loop-hint.png', fullPage: true });
+
+    // There is no fourth: the count says so and the button is switched off, both read
+    // above. Pressing it anyway has to do nothing.
+    const fourth = await page.evaluate(() => {
+      window.gatedspark.hint();
+      return { said: window.gatedspark.hintSaid(), moves: window.gatedspark.movesMade() };
+    });
+    if (fourth.moves !== total) await fail('a fourth hint still marked the board', 'loop-hints');
+    if (fourth.said !== hinted.got[2].said) {
+      await fail('a fourth hint said something new: ' + fourth.said, 'loop-hints');
+    }
+
+    // Put the board back as it was found: the tap checks below need a line they can
+    // call blank. This is also the check that a hint's marks are ordinary moves, since
+    // undo would not reach them otherwise.
+    const cleared = await page.evaluate(() => {
+      while (window.gatedspark.movesMade() > 0) window.gatedspark.undo();
+      return {
+        moves: window.gatedspark.movesMade(),
+        ringed: window.gatedspark.hintedLines().length,
+      };
+    });
+    if (cleared.moves !== 0) await fail('the hint checks left lines on the board', 'loop-hints');
+    if (cleared.ringed !== 0) await fail('a hint ring was left on the board', 'loop-hints');
   }
 
   // Tap one line on, round to ruled out, and back to blank. Three states, one line.

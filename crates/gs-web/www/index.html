@@ -375,6 +375,10 @@ const NEXT_LINE = {
   [Drawn.No]: Drawn.Unknown,
 };
 
+/** What the core calls a square in a hint's list of places. Lines use `Side.Across`
+ *  and `Side.Down`, which are 0 and 1, so a square is the one after them. */
+const SQUARE = 2;
+
 /** How far apart the dots are drawn, and how much room is left round the edge. */
 const STEP = 34;
 const MARGIN = 20;
@@ -406,7 +410,8 @@ const RULES = {
     "A line marked 0 has no filled squares in it at all.",
     "You only have to get the filled squares right. Crossing out the blanks is a note to yourself, and nothing checks it.",
     "Tap a square once to fill it, again to cross it out, again to clear it.",
-    "Stuck? Hint names one square you can work out from here, and says which numbers make it certain. There are three for each puzzle.",
+    "Stuck? Hint works part of the puzzle out and fills it in for you, and says which numbers make it certain.",
+    "There are three for each puzzle, and they get bigger: one square, then half a row or column, then a whole one.",
   ],
   slitherlink: [
     "Draw one single loop along the lines between the dots.",
@@ -415,7 +420,8 @@ const RULES = {
     "A square with no number in it can have any number of its sides used.",
     "Ruling a line out is a note to yourself, and nothing checks it.",
     "Tap between two dots to draw a line, again to rule it out, again to clear it.",
-    "Stuck? Hint names one line you can work out from here, and says which number or dot makes it certain. There are three for each puzzle.",
+    "Stuck? Hint works part of the puzzle out and marks it in for you, and says which number or dot makes it certain.",
+    "There are three for each puzzle, and they get bigger: one line, then half a row or column of lines, then a whole one.",
   ],
 };
 
@@ -654,13 +660,16 @@ function refreshHintsLeft() {
   el("hint").disabled = left === 0;
 }
 
-/** Ask the core for a hint, then say it and point at it.
+/** Ask the core for a hint. It works the next part out and marks it in.
  *
- *  Everything that matters happens inside `game.hint()`: what can be worked out from
- *  the clues, why, and whether there is any allowance left. This function shows a
- *  sentence and puts a ring round a square. In particular it makes no move — the
- *  marking stays the player's, which is what keeps a hint help rather than a change to
- *  the puzzle. */
+ *  Everything that matters happens inside `game.hint()`: what the clues decide, how
+ *  much of it this hint is worth, whether there is any allowance left, and the marking
+ *  itself, which goes through the ordinary rules. This function shows the sentence and
+ *  rings what just changed.
+ *
+ *  The marks are ordinary moves, so Undo takes them back the same way it takes back a
+ *  tap — one at a time, which is why a hint that filled a whole row shows up in the
+ *  move count as a whole row. */
 function askForAHint() {
   clearHintRing();
   const said = el("hint-said");
@@ -678,22 +687,32 @@ function askForAHint() {
   said.hidden = false;
   said.textContent = hint.says();
 
-  // Point at it, and put the keyboard there too, so somebody playing without a mouse
-  // can act on the hint without hunting for the square it named.
-  let target = null;
-  if (hint.points_at() === "square") {
-    target = el("board").querySelector(
-      `td[data-row="${hint.row()}"][data-column="${hint.column()}"]`
-    );
-  } else if (hint.points_at() === "line") {
-    target = el("loop").querySelector(
-      `g.edge[data-side="${hint.side()}"][data-column="${hint.column()}"][data-row="${hint.row()}"]`
-    );
+  // The board first, because the hint has already marked it.
+  refresh();
+
+  // Then ring everything it filled in, so a player can see what just changed. Three
+  // numbers per place, in the order the core reports them: what kind of place, its
+  // row, its column. The page does not work out which game it is holding.
+  const places = Array.from(hint.places());
+  let first = null;
+  for (let i = 0; i < places.length; i += 3) {
+    const kind = places[i];
+    const row = places[i + 1];
+    const column = places[i + 2];
+    const marked =
+      kind === SQUARE
+        ? el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`)
+        : el("loop").querySelector(
+            `g.edge[data-side="${kind}"][data-column="${column}"][data-row="${row}"]`
+          );
+    if (!marked) continue;
+    marked.dataset.hint = "yes";
+    if (!first) first = marked;
   }
-  if (target) {
-    target.dataset.hint = "yes";
-    target.focus();
-  }
+  // The keyboard goes to the first thing that changed, so somebody playing without a
+  // mouse is left where the board just moved rather than back on the button.
+  if (first) first.focus();
+
   refreshHintsLeft();
 }
 
@@ -1069,11 +1088,16 @@ async function main() {
     }
   });
   el("hint").addEventListener("click", askForAHint);
+  // Undo and redo take the ring off as well. A hint fills squares in, so once those
+  // marks are taken back the ring points at squares that are blank again, which would
+  // be pointing at nothing.
   el("undo").addEventListener("click", () => {
+    clearHintRing();
     el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
     refresh();
   });
   el("redo").addEventListener("click", () => {
+    clearHintRing();
     el("note").textContent = game.redo() ? "" : "There is nothing to redo.";
     refresh();
   });
@@ -1242,12 +1266,25 @@ window.gatedspark = {
     const td = el("board").querySelector('td.square[data-hint="yes"]');
     return td ? [Number(td.dataset.row), Number(td.dataset.column)] : null;
   },
+  hintedSquares: () =>
+    Array.from(el("board").querySelectorAll('td.square[data-hint="yes"]')).map((td) => [
+      Number(td.dataset.row),
+      Number(td.dataset.column),
+      Number(td.dataset.mark),
+    ]),
   hintedLine: () => {
     const edge = el("loop").querySelector('g.edge[data-hint="yes"]');
     return edge
       ? [Number(edge.dataset.side), Number(edge.dataset.column), Number(edge.dataset.row)]
       : null;
   },
+  hintedLines: () =>
+    Array.from(el("loop").querySelectorAll('g.edge[data-hint="yes"]')).map((edge) => [
+      Number(edge.dataset.side),
+      Number(edge.dataset.column),
+      Number(edge.dataset.row),
+      Number(edge.dataset.drawn),
+    ]),
   focusIsOnTheHint: () =>
     document.activeElement instanceof Element &&
     document.activeElement.matches('[data-hint="yes"]'),

@@ -20,7 +20,7 @@ use gs_crypto::{Sha256, TrustedKeys};
 
 use crate::play::nonogram::Mark;
 use crate::play::slitherlink::{Line, Which};
-use crate::play::{PointsAt, Session};
+use crate::play::{Place, Session};
 use crate::{load, Playable};
 
 /// The page, holding the keys it will accept puzzles from.
@@ -238,18 +238,24 @@ pub struct Game {
     session: Session,
 }
 
-/// One hint, ready for a page to show and point at.
+/// What a page marks on the screen: one square of a Nonogram.
 ///
-/// Flat on purpose: a page reads a sentence, a kind, and up to three numbers. Making
-/// this a tagged shape a page has to take apart would be asking the page to understand
-/// the reasoning, which is the thing it must not do.
+/// Numbered away from [`Side::Across`] and [`Side::Down`], so one list can carry both
+/// games' places without a page having to ask which game it is holding.
+///
+/// Public so that a check can read the same number the page is given, rather than its
+/// own copy of it.
+pub const SQUARE: i32 = 2;
+
+/// One hint, ready for a page to show.
+///
+/// Flat on purpose: a sentence, and a list of numbers in threes. Making this a shape a
+/// page has to take apart would be asking the page to understand the reasoning, which
+/// is the thing it must not do.
 #[wasm_bindgen]
 pub struct Hinted {
     says: String,
-    points_at: String,
-    row: i32,
-    column: i32,
-    side: i32,
+    places: Vec<i32>,
     hints_left: u32,
 }
 
@@ -261,29 +267,24 @@ impl Hinted {
         self.says.clone()
     }
 
-    /// What the hint points at: `"square"`, `"line"`, or `"nowhere"` for a hint about a
-    /// whole row or a whole number, where one place would be the wrong place to point.
+    /// Everywhere this hint marked, three numbers at a time: what kind of place, then
+    /// its row, then its column.
+    ///
+    /// The first number of each three is `2` for a square of a Nonogram, or a
+    /// [`Side`] — `0` across, `1` down — for a line of a Slitherlink, in which case the
+    /// row and column name the dot the line starts from.
+    ///
+    /// Empty when the hint marked nothing, which happens when it says a row cannot
+    /// work: which square in it is wrong is the player's to decide.
     #[must_use]
-    pub fn points_at(&self) -> String {
-        self.points_at.clone()
+    pub fn places(&self) -> Vec<i32> {
+        self.places.clone()
     }
 
-    /// The row, counting from 0 at the top, or `-1` when the hint points nowhere.
+    /// How many places this hint marked.
     #[must_use]
-    pub fn row(&self) -> i32 {
-        self.row
-    }
-
-    /// The column, counting from 0 at the left, or `-1` when the hint points nowhere.
-    #[must_use]
-    pub fn column(&self) -> i32 {
-        self.column
-    }
-
-    /// Which way a line runs, as a [`Side`], or `-1` when the hint is not about a line.
-    #[must_use]
-    pub fn side(&self) -> i32 {
-        self.side
+    pub fn filled(&self) -> usize {
+        self.places.len() / 3
     }
 
     /// How many hints are left on this puzzle after this one.
@@ -368,48 +369,52 @@ impl Game {
             .collect()
     }
 
-    /// Ask for a hint: the next thing that can be worked out, and where it is.
+    /// Ask for a hint: the next part of the puzzle, worked out and marked in.
     ///
     /// Works out nothing here. The reasoning is in the game's own crate, the allowance
-    /// is in [`Session`], and this turns the answer into something a page can read.
+    /// and the growing sizes are in [`Session`], and this turns the answer into
+    /// something a page can read.
     ///
-    /// A hint makes no move, so the board, the move count and whether the puzzle is
-    /// solved are all exactly as they were.
+    /// The marks it makes go through the ordinary rules, so they count as moves and
+    /// undo takes them back one at a time.
     ///
     /// Throws when there is no hint to give — the three are spent, or nothing could be
     /// worked out — with the sentence to show the player. A thrown error rather than an
-    /// empty hint, because those two cases are the only ones where a page should *not*
-    /// highlight anything, and an empty hint object is the kind of thing a page forgets
-    /// to check.
+    /// empty hint, because those are the two cases where a page should *not* highlight
+    /// anything, and an empty hint object is the kind of thing a page forgets to check.
     pub fn hint(&mut self) -> Result<Hinted, JsError> {
         match self.session.hint() {
             Ok(advice) => {
-                let (points_at, row, column, side) = match advice.points_at {
-                    PointsAt::Square { row, column } => {
-                        ("square", i32::from(row), i32::from(column), -1)
+                // Flattened into one list of numbers, three per place: what kind, then
+                // two coordinates. A page reads it in threes, the way it already reads
+                // `line_places`. Carrying a list of objects across would mean a page
+                // holding a shape from in here.
+                let mut places = Vec::new();
+                for place in &advice.filled {
+                    match place {
+                        Place::Square { row, column } => {
+                            places.push(SQUARE);
+                            places.push(i32::from(*row));
+                            places.push(i32::from(*column));
+                        }
+                        Place::Line {
+                            across,
+                            column,
+                            row,
+                        } => {
+                            places.push(if *across {
+                                Side::Across as i32
+                            } else {
+                                Side::Down as i32
+                            });
+                            places.push(i32::from(*row));
+                            places.push(i32::from(*column));
+                        }
                     }
-                    PointsAt::Line {
-                        across,
-                        column,
-                        row,
-                    } => (
-                        "line",
-                        i32::from(row),
-                        i32::from(column),
-                        if across {
-                            Side::Across as i32
-                        } else {
-                            Side::Down as i32
-                        },
-                    ),
-                    PointsAt::Nowhere => ("nowhere", -1, -1, -1),
-                };
+                }
                 Ok(Hinted {
                     says: advice.says,
-                    points_at: points_at.to_owned(),
-                    row,
-                    column,
-                    side,
+                    places,
                     hints_left: u32::from(advice.hints_left),
                 })
             }
