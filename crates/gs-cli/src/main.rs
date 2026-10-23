@@ -1272,9 +1272,19 @@ fn publish_site(args: &[String]) -> Result<(), String> {
 
     // The page itself, when asked for. Optional because the compiled core is built by
     // `scripts/build-web.sh` and this command does not run a compiler.
+    //
+    // **The page folder's own `store` is skipped**, and that is not a tidiness rule. A
+    // developer's page folder normally has a working store sitting in it, put there by
+    // `scripts/demo-web.sh`, and a working store has the answer beside every puzzle.
+    // Copying the page folder whole would carry all of them into the published folder
+    // and undo the one thing publishing is careful about. The published `store` comes
+    // from the real store and from nowhere else.
     let mut page_files = 0usize;
+    let mut skipped_a_store = false;
     if let Some(page) = args.get("page") {
-        page_files = copy_tree(&PathBuf::from(page), &out)?;
+        let from = PathBuf::from(page);
+        skipped_a_store = from.join("store").is_dir();
+        page_files = copy_tree(&from, &out, &["store"])?;
     }
 
     println!("wrote {}", out.display());
@@ -1297,6 +1307,15 @@ fn publish_site(args: &[String]) -> Result<(), String> {
     } else {
         println!("  no page: pass --page crates/gs-web/www to include it");
     }
+    if skipped_a_store {
+        // Said out loud rather than skipped quietly. Somebody who has been looking at
+        // the page locally has a store in that folder, and they should know which of
+        // the two stores ended up published.
+        println!();
+        println!("  note: the page folder has a store of its own and it was NOT copied.");
+        println!("  That folder keeps the answer beside each puzzle; the published");
+        println!("  puzzles came from --store, without them.");
+    }
     println!();
     println!("Upload that folder to any web host. Nothing in it needs a program to serve");
     println!("it, because every check happens on the device that opens it.");
@@ -1304,7 +1323,10 @@ fn publish_site(args: &[String]) -> Result<(), String> {
 }
 
 /// Copy a directory and everything under it, returning how many files were written.
-fn copy_tree(from: &PathBuf, to: &PathBuf) -> Result<usize, String> {
+///
+/// `skip` names entries at the top level that are not copied. It is one entry today —
+/// `store` — and the reason it exists is in [`publish_site`].
+fn copy_tree(from: &PathBuf, to: &PathBuf, skip: &[&str]) -> Result<usize, String> {
     io_err(format!("making {}", to.display()), || {
         std::fs::create_dir_all(to)
     })?;
@@ -1316,9 +1338,14 @@ fn copy_tree(from: &PathBuf, to: &PathBuf) -> Result<usize, String> {
         let kind = entry
             .file_type()
             .map_err(|cause| format!("reading {}: {cause}", entry.path().display()))?;
+        if skip.iter().any(|name| entry.file_name() == *name) {
+            continue;
+        }
         let target = to.join(entry.file_name());
         if kind.is_dir() {
-            written += copy_tree(&entry.path(), &target)?;
+            // Only the top level is filtered: a folder named `store` deeper inside the
+            // page is somebody's own and not the one this command writes.
+            written += copy_tree(&entry.path(), &target, &[])?;
         } else {
             io_err(format!("copying {}", target.display()), || {
                 std::fs::copy(entry.path(), &target).map(|_| ())
