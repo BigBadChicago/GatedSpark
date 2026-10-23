@@ -1,6 +1,6 @@
 // Drives the real page the way a person does: open it, look at it, lay the answer in,
 // and check that the page says "solved" only because the core said so.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 // Playwright is not a dependency of this project. It is whatever copy is installed on
@@ -50,6 +50,19 @@ function drawnLines(path) {
     if (bytes.readInt16LE(8 + i * 2) === 1) drawn.push(i);
   }
   return { count, drawn };
+}
+
+/** Every puzzle in the store, by name.
+ *
+ *  Read off the disk rather than out of the page. The page used to carry a list of
+ *  names; since the schedule arrived it carries none on purpose — it knows about today
+ *  and the days before it, and nothing else. A puzzle's name is its own fingerprint, so
+ *  `window.gatedspark.open(name)` still works for any of them, which is how a link to
+ *  one puzzle works and how these checks reach a puzzle that is not on the calendar. */
+function everyPuzzle(www) {
+  return readdirSync(`${www}/store`)
+    .filter((name) => name.length === 64 && statSync(`${www}/store/${name}`).isDirectory())
+    .sort();
 }
 
 const browser = await chromium.launch();
@@ -110,11 +123,27 @@ const details = await page.evaluate(() => ({
   rowClues: document.querySelectorAll('th.row-clue').length,
   solvedShowing: !document.getElementById('solved').hidden,
   moves: document.getElementById('moves').textContent,
-  choices: document.getElementById('pick').options.length,
-  name: document.getElementById('pick').value,
+  games: document.getElementById('game-pick').options.length,
+  days: [...document.getElementById('day-pick').options].map((o) => o.textContent),
+  name: document.getElementById('day-pick').value,
+  todayLine: document.getElementById('today-line').textContent,
 }));
 console.log('details ' + JSON.stringify(details));
 if (details.squares === 0) await fail('no grid was drawn', 'empty');
+// The page opened today's puzzle with nothing in the address bar, which is the whole
+// point of the schedule: a visitor gets a puzzle without being handed a name.
+if (details.games < 1) await fail('the page offered no games, so it has no schedule', 'no-schedule');
+if (details.days.length < 1) await fail('the day picker is empty, so there is no puzzle for today', 'no-today');
+if (!details.days[0].endsWith('(today)')) await fail('the first day offered is not today: ' + details.days[0], 'not-today');
+if (!/^Today is \d{4}-\d{2}-\d{2}\./.test(details.todayLine)) await fail('the page does not say what today is: ' + details.todayLine, 'no-today-line');
+// And never a day that has not arrived. Days are published ahead, so the schedule holds
+// future days; listing one would hand a player tomorrow's puzzle today.
+{
+  const today = new Date();
+  const asText = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const latest = details.days[0].slice(0, 10);
+  if (latest > asText(today)) await fail('the day picker offered a day that has not arrived: ' + latest, 'future-day');
+}
 if (details.colClues !== details.rowClues) await fail('clue counts disagree with a square board', 'clues');
 if (details.solvedShowing) await fail('it said solved before a single tap', 'wrongly-solved');
 if (!details.fingerprint.startsWith(details.name.slice(0, 8))) await fail('the fingerprint shown is not this puzzle', 'wrong-id');
@@ -214,9 +243,9 @@ await page.evaluate(() => window.gatedspark.undo());
 if (!await page.evaluate(() => window.gatedspark.isSolved())) await fail('undo did not get back to solved', 'undo-solved');
 
 // A second puzzle, to prove switching rebuilds the grid and forgets the old game.
-const second = await page.evaluate(() => document.getElementById('pick').options[1]?.value);
+const second = await page.evaluate(() => document.getElementById('day-pick').options[1]?.value);
 if (second) {
-  await page.selectOption('#pick', second);
+  await page.selectOption('#day-pick', second);
   await page.waitForFunction((n) => document.getElementById('fingerprint').textContent.startsWith(n.slice(0, 8)), second, { timeout: 10000 });
   const switched = await page.evaluate(() => ({
     squares: document.querySelectorAll('td.square').length,
@@ -260,9 +289,9 @@ if (!/No puzzles saved/.test(blank)) await fail('a fresh device should say it ha
 if (!/Room for 5 more/.test(blank)) await fail('it should know it has room for five', 'saved-blank');
 
 // Save the one on screen, and two more.
-const names = await page.evaluate(() => Array.from(document.getElementById('pick').options, (o) => o.value));
+const names = everyPuzzle(WWW);
 for (const name of names.slice(0, 3)) {
-  await page.selectOption('#pick', name);
+  await page.evaluate((n) => window.gatedspark.open(n), name);
   await page.waitForFunction((n) => document.getElementById('fingerprint').textContent === n, name, { timeout: 10000 });
   await page.evaluate(() => window.gatedspark.save());
 }
@@ -362,7 +391,7 @@ await page.evaluate(() => {
 
 // Save the doomed puzzle and one other, and open the doomed one so that somebody is
 // part-way through it when the withdrawal lands.
-const others = await page.evaluate(() => [...document.getElementById('pick').options].map((o) => o.value));
+const others = everyPuzzle(WWW);
 const bystander = others.find((name) => name !== DOOMED);
 if (!bystander) await fail('need two puzzles to tell a withdrawal from a wipe', 'withdraw-setup');
 
@@ -592,6 +621,62 @@ if (!LOOP) {
   if (!savedLoop.showing) await fail('the saved puzzle did not come back onto the screen', 'loop-saved');
   await page.screenshot({ path: OUT + '/loop-saved.png', fullPage: true });
 }
+
+// ---------------------------------------------------------------------------
+// The schedule, driven: switching game, and downloading days ahead
+// ---------------------------------------------------------------------------
+
+// Start from a clean device, so the counts below mean something.
+await page.goto(URL, { waitUntil: 'networkidle' });
+await page.evaluate(() => window.gatedspark.forgetEverythingSaved());
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
+
+// Choosing the other game from the picker opens that game's puzzle for today, with
+// nothing typed and no name known to the page.
+const bothGames = await page.evaluate(() => window.gatedspark.games());
+console.log('games offered ' + JSON.stringify(bothGames));
+if (bothGames.length < 2) await fail('both games should be on the calendar', 'one-game');
+const other = bothGames[1];
+await page.evaluate((family) => window.gatedspark.chooseGame(family), other);
+await page.waitForFunction(() => window.gatedspark.boardIsShowing(), null, { timeout: 15000 });
+const afterSwitch = await page.evaluate(() => ({
+  family: window.gatedspark.family(),
+  days: window.gatedspark.days(),
+  line: window.gatedspark.todayLine(),
+  solved: window.gatedspark.isSolved(),
+}));
+console.log('after switching game ' + JSON.stringify(afterSwitch));
+if (afterSwitch.family !== other) await fail(`choosing ${other} opened a ${afterSwitch.family}`, 'switch-game');
+if (afterSwitch.days.length < 1 || !afterSwitch.days[0].endsWith('(today)')) {
+  await fail('the other game has no puzzle for today: ' + JSON.stringify(afterSwitch.days), 'switch-game');
+}
+if (afterSwitch.solved) await fail('a freshly opened puzzle came up solved', 'switch-game');
+await page.screenshot({ path: OUT + '/other-game.png', fullPage: true });
+
+// Downloading days ahead. The schedule in the demo ends today, so there is nothing
+// after it: the page must say so plainly rather than appearing to save something.
+const nothingAhead = await page.evaluate(async () => {
+  await window.gatedspark.saveAhead();
+  return { note: document.getElementById('note').textContent, saved: window.gatedspark.savedLine() };
+});
+console.log('nothing to download ahead ' + JSON.stringify(nothingAhead));
+if (!/no further days/.test(nothingAhead.note)) {
+  await fail('with no days left it should say so: ' + nothingAhead.note, 'save-ahead-none');
+}
+if (!/No puzzles saved/.test(nothingAhead.saved)) {
+  await fail('nothing should have been saved: ' + nothingAhead.saved, 'save-ahead-none');
+}
+
+// And with days ahead there are, which the driver arranges by asking for the days after
+// the first day of the calendar rather than after today. Same call the button makes.
+const ahead = await page.evaluate(() => {
+  const earliest = window.gatedspark.days().slice(-1)[0].slice(0, 10).split('-').map(Number);
+  const coming = window.gatedspark.toDownload(earliest[0], earliest[1], earliest[2], window.gatedspark.family(), 5);
+  return coming.map((d) => d.date());
+});
+console.log('days after the first day of the calendar ' + JSON.stringify(ahead));
+if (ahead.length === 0) await fail('the calendar should have days after its own first day', 'to-download');
 
 console.log('console problems after both games ' + JSON.stringify(problems));
 await browser.close();

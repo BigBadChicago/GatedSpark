@@ -57,6 +57,8 @@ use gs_nonogram::clues::{Clues, Runs};
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
+#[cfg(target_arch = "wasm32")]
+pub mod calendar;
 pub mod play;
 #[cfg(target_arch = "wasm32")]
 pub mod saved;

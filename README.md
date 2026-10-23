@@ -14,10 +14,11 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 |---|---|
 | `crates/gs-core` | The shared deterministic core: the puzzle DSL, logical state, transition semantics, the branching timeline, replay, and the platform's verification vocabulary. |
 | `crates/gs-nonogram` | The launch puzzle family: clues, rules, the line solver, the difficulty feature vector, and the SMT-LIB2 encoding a real solver reads. |
+| `crates/gs-slitherlink` | The second puzzle family: the board's three index spaces, the one-closed-loop encoding, and generation by taking numbers away while the answer stays the only one. |
 | `crates/gs-crypto` | The workspace's only cryptography: SHA-256 for the content fingerprint, Ed25519 for the signature. |
 | `crates/gs-solver` | Runs a real SMT solver as a separate program and turns every failure into "nobody knows". |
 | `crates/gs-store` | The puzzle store: a plain folder of plain files, one folder per puzzle, named by the puzzle's fingerprint. |
-| `crates/gs-cli` | The `gatedspark` command: make a key, fill a store, read a report, re-check the lot. |
+| `crates/gs-cli` | The `gatedspark` command: make a key, fill a store, read a report, re-check the lot, schedule the days, and publish a folder a web host can serve. |
 | `crates/gs-offline` | Puzzles kept on a device, so that losing signal does not end the game. No files, no network, and no idea what game it is holding. |
 | `crates/gs-web` | The browser's half: open a signed puzzle and refuse everything else. It cannot reach a solver or a folder, and a test holds that. |
 | `docs/adr/` | Architecture decision records, including the language, solver and toolchain choices. |
@@ -26,7 +27,7 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 The project's foundation documents, the build plan for this slice, and the content-delivery design
 live in the project's shared folder rather than in the repository.
 
-## Current state: M5 is under way
+## Current state: both games are finished, and stage 5 has begun
 
 M0 was the repository and its test harness. M1 is the deterministic core: the DSL, logical state,
 `S(t+1) = F(S(t), A(t), R)`, state hashing, undo and redo with branching, and replay against
@@ -229,6 +230,47 @@ The same puzzle now takes 93 taps. Missing a filled square still leaves it unfin
 *stored* answer must still decide every square — `publish::replay_of` requires that separately. See
 ADR 0010.
 
+
+## Which puzzle is today's
+
+A daily puzzle needs a notion of "today", and this project forbids letting the reader's
+clock decide whether content can be trusted. The schedule settles that: it maps a day
+**number** to a puzzle, counting from a start day written inside the signed file. A
+device turns today's date into a day number and uses the clock for nothing else.
+
+So a wrong clock shows the wrong day's puzzle. It cannot make a bad puzzle look good,
+revive a withdrawn one, or invent a day nobody signed.
+
+The file is built exactly like the withdrawal list, because it has the same problems:
+its own magic bytes **inside** what the signature covers, so a signature over a puzzle
+can never be lifted onto a schedule; a serial number that only goes up, because
+replaying last month's genuine schedule needs no key at all; and no timestamps anywhere.
+Entries are sorted with one puzzle per game per day, refused on the way in *and* on the
+way out, so a given calendar has exactly one possible encoding.
+
+```bash
+# Give every game another week. Run it again and it extends rather than restarting.
+cargo run -p gs-cli -- schedule --store ./store --key ~/gatedspark-dev.key     --start 2026-10-24 --days 7
+
+# Write a folder any web host can serve.
+cargo run -p gs-cli -- publish --store ./store --key ~/gatedspark-dev.key     --out ./site --page crates/gs-web/www
+```
+
+Five refusals, each of them a day that would otherwise break for every player at once:
+the start day cannot be moved once signed (it would renumber every published day), two
+puzzles cannot share a day for one game, a withdrawn puzzle is never scheduled, a
+schedule number must go up, and asking for more days than there are puzzles prints the
+shortfall instead of quietly delivering fewer.
+
+**`publish` leaves the answers behind.** A store keeps the filled-in grid beside each
+puzzle so nothing has to solve it twice; uploading that folder as it stands would
+publish every answer next to every puzzle. Only the signed package is copied, and
+`publishing_leaves_every_answer_behind` holds it.
+
+There is no program on the server, on purpose. Every check that matters already happens
+on the device: the page checks each package's signature itself, and the schedule and the
+withdrawal list the same way. A server that only handed over files would be a server to
+run, pay for, patch and have go down, in exchange for nothing.
 
 ## Playing with no signal
 
