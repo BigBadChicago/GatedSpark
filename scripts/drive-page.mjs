@@ -65,7 +65,12 @@ function everyPuzzle(www) {
     .sort();
 }
 
-const browser = await chromium.launch();
+// Playwright normally launches the browser it downloaded for itself. On a machine where
+// the browser came from somewhere else — a container that ships one, a distribution
+// package — point this at it. Same reasoning as PLAYWRIGHT_PATH above: this is a by-hand
+// check, so it uses whatever that machine happens to have.
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM || undefined;
+const browser = await chromium.launch(executablePath ? { executablePath } : {});
 const page = await browser.newPage({ viewport: { width: 430, height: 940 } });
 
 const problems = [];
@@ -647,6 +652,29 @@ const afterSwitch = await page.evaluate(() => ({
   solved: window.gatedspark.isSolved(),
 }));
 console.log('after switching game ' + JSON.stringify(afterSwitch));
+
+// The rules on screen must be this game's rules. A page that explained one game while
+// showing the other would be worse than one that explained nothing, because a player
+// would believe it. Checked by reading what is on the page, not by trusting the table
+// it came from.
+const rules = await page.evaluate(() => ({
+  title: window.gatedspark.rulesTitle(),
+  lines: window.gatedspark.rulesShown(),
+  open: window.gatedspark.rulesOpen(),
+}));
+console.log('rules on screen ' + JSON.stringify(rules));
+if (!rules.lines.length) await fail('the game is showing no rules at all', 'rules');
+if (!rules.open) await fail('the rules start folded away, so a new player never sees them', 'rules');
+const saysLoop = rules.lines.join(' ').includes('loop');
+if (afterSwitch.family === 'slitherlink' && !saysLoop) {
+  await fail('the loop game is not being told to draw a loop: ' + JSON.stringify(rules.lines), 'rules');
+}
+if (afterSwitch.family === 'nonogram' && saysLoop) {
+  await fail('the picture game is being given the loop game rules', 'rules');
+}
+if (!rules.title.toLowerCase().includes(afterSwitch.family)) {
+  await fail(`the rules are titled "${rules.title}" while a ${afterSwitch.family} is on screen`, 'rules');
+}
 if (afterSwitch.family !== other) await fail(`choosing ${other} opened a ${afterSwitch.family}`, 'switch-game');
 if (afterSwitch.days.length < 1 || !afterSwitch.days[0].endsWith('(today)')) {
   await fail('the other game has no puzzle for today: ' + JSON.stringify(afterSwitch.days), 'switch-game');
