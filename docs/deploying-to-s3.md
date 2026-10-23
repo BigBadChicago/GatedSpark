@@ -45,12 +45,15 @@ a small file into:
 ```powershell
 aws s3 website s3://YOUR-BUCKET-NAME --index-document index.html
 
-aws s3api put-public-access-block --bucket YOUR-BUCKET-NAME `
-    --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+aws s3api put-public-access-block --bucket YOUR-BUCKET-NAME --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
 
 '{"Version":"2012-10-17","Statement":[{"Sid":"PublicRead","Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::YOUR-BUCKET-NAME/*"}]}' | Set-Content -Encoding ascii policy.json
 aws s3api put-bucket-policy --bucket YOUR-BUCKET-NAME --policy file://policy.json
 ```
+
+Each of those is one line. None of them is split across two, on purpose: a command
+split with a backtick only works if the line break is copied with it, and a line that
+breaks when pasted is worse than a long one.
 
 The middle command is the one that sounds alarming and is not: it is what makes a public
 website public. The bucket holds signed puzzles and a page, and the policy that follows
