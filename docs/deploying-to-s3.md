@@ -38,6 +38,27 @@ the address below gives a 404.
 needs to list the bucket: the page asks for files by name, and a puzzle's name is its
 own fingerprint.
 
+**The same three settings, as commands**, if you would rather not click through the
+console. Replace `YOUR-BUCKET-NAME`, and run them from a folder you do not mind writing
+a small file into:
+
+```powershell
+aws s3 website s3://YOUR-BUCKET-NAME --index-document index.html
+
+aws s3api put-public-access-block --bucket YOUR-BUCKET-NAME --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+
+'{"Version":"2012-10-17","Statement":[{"Sid":"PublicRead","Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::YOUR-BUCKET-NAME/*"}]}' | Set-Content -Encoding ascii policy.json
+aws s3api put-bucket-policy --bucket YOUR-BUCKET-NAME --policy file://policy.json
+```
+
+Each of those is one line. None of them is split across two, on purpose: a command
+split with a backtick only works if the line break is copied with it, and a line that
+breaks when pasted is worse than a long one.
+
+The middle command is the one that sounds alarming and is not: it is what makes a public
+website public. The bucket holds signed puzzles and a page, and the policy that follows
+grants reading and nothing else.
+
 **3. Nothing else.** No CORS rules, because the page and the puzzles are on the same
 host. No CloudFront, unless you later want a custom address or a certificate.
 
@@ -53,7 +74,18 @@ cargo run -p gs-cli -- publish \
 scripts/deploy-s3.sh ./site YOUR-BUCKET-NAME us-east-2
 ```
 
+On Windows, where there is no bash, the second command has a twin that does the same
+thing:
+
+```powershell
+scripts\deploy-s3.ps1 .\site YOUR-BUCKET-NAME us-east-2
+```
+
 Then the page is at `http://YOUR-BUCKET-NAME.s3-website.us-east-2.amazonaws.com/`.
+
+**The upload needs no build.** The two halves are separate: making the folder needs the
+Rust toolchain, putting it up needs only the AWS command line tool. A folder made on one
+machine uploads fine from another, which is the way out when a machine cannot build.
 
 ## What the upload script does that a plain copy would not
 

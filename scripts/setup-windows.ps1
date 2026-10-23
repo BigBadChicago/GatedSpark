@@ -59,4 +59,47 @@ finally {
 }
 
 Write-Host ''
+Write-Host 'Checking that the GNU build tools are complete ...'
+
+# Why this check exists: switching the host and installing the toolchain is not enough on
+# its own. The gnu flavour reaches Windows system libraries through a helper called
+# dlltool, which arrives in rustup's `rust-mingw` piece. When it is missing the build
+# fails deep inside a dependency with "error calling dlltool 'dlltool.exe': program not
+# found", which says nothing about what to install. A setup script that reports a machine
+# is ready when it is not is worse than no setup script, so this asks the question here
+# where the answer can be explained.
+$dlltool = Get-Command dlltool.exe -ErrorAction SilentlyContinue
+if (-not $dlltool) {
+    $root = (rustup show home).Trim()
+    $bundled = Join-Path $root "toolchains\$toolchain\lib\rustlib\$triple\bin\self-contained\dlltool.exe"
+    if (Test-Path $bundled) {
+        $dlltool = $bundled
+    }
+}
+
+if ($dlltool) {
+    Write-Host "  dlltool found: $dlltool"
+} else {
+    Write-Host ''
+    Write-Warning @'
+dlltool.exe was not found.
+
+Without it the build stops inside the `getrandom` crate with:
+    error: error calling dlltool 'dlltool.exe': program not found
+
+dlltool is part of MinGW, which the GNU toolchain is built on. Two ways to get it:
+
+  1. Reinstall the piece it ships in:
+       rustup component add rust-mingw --toolchain TOOLCHAIN
+
+  2. Or install MinGW-w64 and put its bin folder on PATH:
+       winget install -e --id MSYS2.MSYS2
+     then add C:\msys64\mingw64\bin to PATH and open a new terminal.
+
+Everything else above succeeded. Run this script again after either one.
+'@.Replace('TOOLCHAIN', $toolchain)
+    exit 1
+}
+
+Write-Host ''
 Write-Host 'Done. Now run:  cargo test --workspace'

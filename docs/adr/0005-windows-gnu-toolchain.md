@@ -81,6 +81,42 @@ setup. Changing the default host leaves the pin authoritative.
 - Solver agreement on Windows was checked by hand, not by CI. The Linux `solver` job stays the one
   that gates it.
 
+## Addendum, 2026-10-23: the gap this ADR named came true
+
+The limit recorded above — that CI cannot prove the build works on a machine with no Visual
+Studio, because GitHub's Windows runners ship it — stopped being hypothetical. On a plain Windows
+11 machine the build failed with:
+
+```
+error: error calling dlltool 'dlltool.exe': program not found
+error: could not compile `getrandom` (lib)
+```
+
+`dlltool` is a MinGW helper that works out how to call into a Windows system library. The gnu
+toolchain needs it whenever a crate links a system library by the `raw-dylib` route, and
+`getrandom` 0.4 takes that route on Windows to reach the operating system's randomness. It is the
+only third-party crate in the workspace outside the browser crate, and `gs-cli` depends on it for
+exactly one call: `keygen` filling a private key with real random bytes.
+
+It ships in rustup's `rust-mingw` component, so the fix is to reinstall that component, or to put a
+MinGW-w64 `bin` folder on PATH.
+
+**What this says about the decision.** It does not reverse it: the msvc route still needs a much
+larger download, and this machine still has no Visual Studio. What it corrects is the claim's
+width. "The gnu toolchain builds this workspace" was proven on a runner that has Visual Studio,
+and on *that* machine MinGW's binutils happen to be present too. The narrower truth is that the
+gnu toolchain needs its own binutils, and whether they are present is a second thing about the
+machine that nothing in CI checks. The setup script switches the host and installs the toolchain;
+it does not confirm `dlltool` can actually be run, which is the one check that would have turned a
+confusing compiler error into a sentence saying what to install.
+
+**Done in response:** `scripts/setup-windows.ps1` now looks for `dlltool.exe`, on PATH and in the
+toolchain's own `self-contained` folder, and stops with the two ways to install it rather than
+printing "Done". A setup script that reports a machine is ready when it is not is the same vacuous
+pass this project is arranged against elsewhere. What it still cannot do is prove the *build*
+works, only that the piece known to be missing is present; that remains the limit of any check
+that is not an actual build on an actual bare machine.
+
 ## Alternatives
 
 **Install Visual Studio Build Tools.** Works, and keeps the default msvc ABI. Rejected as a

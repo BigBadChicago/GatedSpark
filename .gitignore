@@ -11,3 +11,11 @@
 /crates/gs-web/www/store/
 /crates/gs-web/www/trusted-key.js
 /crates/gs-web/www/puzzles.js
+
+# A published site folder, made by `gatedspark publish`. It is content, not source: the
+# puzzles in it are signed copies of what is in a store, and the page in it is a build.
+# Committing one would mean a second copy of every puzzle, going stale from the day it
+# landed. The default name is `site`; this also covers the usual alternatives.
+/site/
+/out/
+/public/
