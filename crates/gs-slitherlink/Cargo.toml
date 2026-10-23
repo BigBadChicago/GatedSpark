@@ -1,0 +1,20 @@
+[package]
+name = "gs-slitherlink"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gs-core = { path = "../gs-core" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+gs-core = { path = "../gs-core" }
+# Test-only, and it is the Nonogram *encoder* that is under test rather than
+# Nonogram: `tests/refused_by_a_tier_a_encoder.rs` checks that a compiler with no
+# loop encoding refuses this family by name instead of verifying the easy half.
+# Nothing in this crate's own code knows the other family exists.
+gs-nonogram = { path = "../gs-nonogram" }
