@@ -156,9 +156,27 @@ fn measurements_of(candidate: &Candidate) -> Vec<Measurement> {
 /// engine is what a player will run. This checks the thing that ships: the witness
 /// satisfies the ruleset's own goal test, reached through `Ruleset::is_solved` rather
 /// than by re-reading the clues here.
-fn replay_of(puzzle: &Nonogram, witness: &State) -> Replay {
+///
+/// It also requires every square to be decided, which `is_solved` stopped requiring
+/// on 2026-10-23 when crossing out became optional for players. The two are different
+/// questions and are now asked separately. A player has finished when the filled
+/// squares are right; a *stored answer* is a whole board, and one with undecided
+/// squares in it would be a worse record of what the solver found while hashing to a
+/// different value — so the store's copy would no longer be the answer anyone checked.
+///
+/// Public so that judgement can be tested directly. `report_for` works out its own
+/// witness by solving, so there is no way to hand it a half-marked one from outside,
+/// and a claim with no way to check it is the kind this project does not make.
+#[must_use]
+pub fn replay_of(puzzle: &Nonogram, witness: &State) -> Replay {
     if witness.dims() != puzzle.clues.dims {
         return Replay::Refused("witness is not the shape of the board");
+    }
+    let cells = u32::try_from(puzzle.clues.dims.cell_count()).unwrap_or(u32::MAX);
+    let every_square_decided =
+        (0..cells).all(|i| witness.get(i).map(|c| !c.is_unknown()).unwrap_or(false));
+    if !every_square_decided {
+        return Replay::Refused("the witness leaves a square undecided");
     }
     if !puzzle.is_solved(witness) {
         return Replay::Refused("the engine does not consider the witness solved");

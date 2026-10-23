@@ -152,20 +152,32 @@ impl Ruleset for Nonogram {
         })
     }
 
-    /// `G`: every cell is decided and every line matches its clue.
+    /// `G`: every line's filled squares match its clue.
     ///
     /// Checking the clues rather than comparing against a stored answer is
     /// deliberate. A Nonogram's goal is its clues; comparing to one remembered
     /// solution would quietly reject a second valid answer, and whether a second
     /// answer exists is the solver's question, asked before publication, not a thing
     /// to paper over at play time.
+    ///
+    /// **A square left undecided counts as not filled.** Crossing a square out says
+    /// nothing the absence of a filled square does not already say, so a player who
+    /// fills the right squares has finished whether or not they marked the rest.
+    /// This changed on 2026-10-23, on the project owner's decision, after playing a
+    /// real 15 by 15 puzzle took 372 taps for 93 filled squares; see ADR 0010.
+    ///
+    /// Three things this does **not** loosen, each with a test:
+    ///
+    /// * A board with extra filled squares still fails, because the runs will not
+    ///   match. "Only the filled squares count" is not "only the filled squares the
+    ///   answer has".
+    /// * A blank board still fails any puzzle with a clue in it, because an empty
+    ///   line's runs are empty and the clue's are not.
+    /// * Nothing published gets easier to produce. [`crate::publish`] requires a
+    ///   witness to decide every square, separately from this, so a stored answer is
+    ///   still a complete board rather than only the half of one a player needs.
     fn is_solved(&self, state: &State) -> bool {
         let dims = self.clues.dims;
-        let all_decided = (0..u32::try_from(dims.cell_count()).unwrap_or(u32::MAX))
-            .all(|i| state.get(i).map(|c| !c.is_unknown()).unwrap_or(false));
-        if !all_decided {
-            return false;
-        }
         let rows_match = (0..dims.height).all(|y| {
             let line: Vec<bool> = self
                 .row_marks(state, y)

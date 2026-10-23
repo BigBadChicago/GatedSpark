@@ -73,7 +73,7 @@ impl std::fmt::Display for NotPlayable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NotPlayable::NotAValidPackage(why) => {
-                write!(f, "this is not a puzzle this page will accept: {why:?}")
+                write!(f, "{}", plainly(why))
             }
             NotPlayable::WrongFamily { package_says } => write!(
                 f,
@@ -90,9 +90,66 @@ impl std::fmt::Display for NotPlayable {
             ),
             NotPlayable::UnreadablePuzzle(why) => write!(
                 f,
-                "this puzzle is correctly signed but its board does not read: {why:?}. \
-                 That is a bug here, not a damaged download."
+                "this puzzle is correctly signed, but its board does not read: {}. \
+                 That is a fault in this program, not a damaged download.",
+                board_plainly(why)
             ),
+        }
+    }
+}
+
+/// Say in a sentence what went wrong with a package.
+///
+/// This exists because `{why:?}` prints the name of a variant, and a name like
+/// `SignatureRejected` is not a sentence. A player reads these words, so every one of
+/// them is written for a player. The compiler holds this to being complete: a new
+/// reason added upstream stops this matching, rather than silently printing a name.
+fn plainly(why: &OpenError) -> String {
+    match why {
+        OpenError::NotAPackage => "this file is not a GatedSpark puzzle at all.".to_string(),
+        OpenError::UnsupportedFormat(version) => format!(
+            "this puzzle was written in a newer file layout (number {version}) than this \
+             page knows how to read. Refusing it rather than guessing at it."
+        ),
+        OpenError::Truncated { field } => format!(
+            "this puzzle file stops part way through, while reading its {field}. The \
+             download did not finish."
+        ),
+        OpenError::TrailingBytes(extra) => format!(
+            "there are {extra} extra bytes after the end of this puzzle. Something has \
+             been added to the file, so it is not the puzzle it was signed as."
+        ),
+        OpenError::ContentIdMismatch { .. } => {
+            "this puzzle is not the puzzle it says it is: its contents do not match its \
+             own fingerprint. Some of the bytes changed after it was made."
+                .to_string()
+        }
+        OpenError::SignatureRejected => {
+            "this puzzle is not signed by anyone this page trusts. Either it was changed \
+             after it was signed, or it came from somewhere else."
+                .to_string()
+        }
+        OpenError::Malformed { field } => {
+            format!("this puzzle file is damaged: its {field} does not make sense.")
+        }
+    }
+}
+
+/// The same, for the board inside a package that was otherwise fine.
+fn board_plainly(why: &DecodeError) -> String {
+    match why {
+        DecodeError::Truncated { field } => {
+            format!("the clue numbers stop part way through, at the {field}")
+        }
+        DecodeError::TrailingBytes(extra) => {
+            format!("there are {extra} bytes left over after the clue numbers")
+        }
+        DecodeError::LineCountDisagreesWithDims {
+            axis,
+            expected,
+            found,
+        } => {
+            format!("the board says it is {expected} {axis} across, and then gives {found} of them")
         }
     }
 }

@@ -220,9 +220,23 @@ there are players. The thresholds are provisional and the module says so.
 | The browser refuses another family's puzzle, or another rules version, rather than attempting it | `loading::another_games_puzzle_is_refused_rather_than_attempted`, `..._a_puzzle_from_different_rules_is_refused_in_either_direction` |
 | A `Playable` can only be obtained by loading a verified package | structural: `load` is the only function returning one; recorded in ADR 0009's not-enforced list, since a negative cannot be proved |
 | The browser's translation layer works in a real browser | `in_a_real_browser::*`, six tests in headless Chrome, run in CI |
+| Every reason a package can be refused is written as a sentence, not a type name | `loading::every_single_reason_a_package_can_be_refused_is_written_in_words` |
+| No refusal shown to a player contains a type name | `loading::reads_as_words`, applied in both refusal tests |
+| The page draws a grid with a clue for every row and column | `scripts/drive-page.mjs`, run by `scripts/check-page.sh` — **by hand, not in CI** |
+| Tapping fills, crosses out and clears; undo and redo go back and forward | `drive-page.mjs` — by hand |
+| The page shows "solved" when the rules say so, and not when one square is changed | `drive-page.mjs` — by hand; the second half is the guard that makes the first mean anything |
+| A puzzle is finished when its filled squares match, with or without the blanks crossed out | `playing.rs::a_board_with_only_its_filled_squares_marked_is_solved`, `..::clearing_a_crossed_out_square_leaves_the_puzzle_solved`, `pipeline.rs::crossing_out_the_blanks_is_optional` |
+| Missing one filled square is still unfinished | `playing.rs::a_board_one_filled_square_short_is_not_solved` |
+| A stored answer must decide every square, which `is_solved` no longer requires | `pipeline.rs::a_witness_that_leaves_a_square_undecided_is_refused_even_though_it_is_solved` |
+| Switching puzzles rebuilds the grid and forgets the old game | `drive-page.mjs` — by hand |
+| A package with one byte changed is refused by the page, in readable words | `drive-page.mjs` — by hand |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
+- **The page is only checked by hand.** `scripts/check-page.sh` drives the real page in a real
+  browser and is the only thing that tests the page at all, but it is not in CI: it needs a
+  browser-driving dependency this project has not taken on. The wasm tests in CI prove the *core*
+  works in a browser; nothing in CI proves the *page* does. Nothing anywhere checks how it looks.
 - ~~**Digest strength.**~~ **Resolved 2026-10-22 by ADR 0006.** The digest is SHA-256 and the
   signature is Ed25519, both in `gs-crypto`, both checked against published test vectors. What is
   still true, and is the reason the traits stay unimplemented in `gs-core`, is that this crate's

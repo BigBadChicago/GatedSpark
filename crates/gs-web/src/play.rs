@@ -211,6 +211,9 @@ impl Session {
     ///
     /// Asked of the rules, every time, with no cached answer and no shortcut. The whole
     /// module exists so that this line is the only answer to this question.
+    ///
+    /// What the rules say, since 2026-10-23: the **filled** squares must match the
+    /// clues, and crossing out the blanks is optional. See `Nonogram::is_solved`.
     #[must_use]
     pub fn is_solved(&self) -> bool {
         self.rules.is_solved(self.timeline.state())

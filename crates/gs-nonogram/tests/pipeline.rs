@@ -1,16 +1,27 @@
 //! Clue derivation, the line solver, and the properties the slice rests on.
 
+use gs_core::report::Replay;
 use gs_core::ruleset::{Illegal, Ruleset};
 use gs_core::state::{Cell, Dims, State};
 use gs_core::timeline::{replay, Timeline};
 use gs_nonogram::clues::{runs_of, Clues, Pattern};
 use gs_nonogram::line::Mark;
+use gs_nonogram::publish::replay_of;
 use gs_nonogram::rules::{Action, Nonogram, EMPTY, FILLED};
 use gs_nonogram::solve::{from_state, solve, Analysis, Budget, Solved};
 
 /// A 5x5 cross. Line-solvable, and the clues admit only this board.
 fn cross() -> Pattern {
     Pattern::from_rows(&["..#..", "..#..", "#####", "..#..", "..#.."]).expect("rectangular")
+}
+
+/// The pattern's squares in row order, which is the order a `State` indexes them in.
+fn filled_flags(pattern: &Pattern) -> Vec<bool> {
+    let dims = pattern.dims();
+    (0..dims.height)
+        .flat_map(|y| (0..dims.width).map(move |x| (x, y)))
+        .map(|(x, y)| pattern.is_filled(x, y))
+        .collect()
 }
 
 fn puzzle_from(pattern: &Pattern) -> Nonogram {
@@ -177,14 +188,90 @@ fn the_goal_predicate_checks_the_clues_not_a_remembered_answer() {
 }
 
 #[test]
-fn an_incomplete_board_is_not_solved_however_consistent_it_is() {
+fn a_board_missing_filled_squares_is_not_solved_however_consistent_it_is() {
     let puzzle = puzzle_from(&cross());
     let mut partial = State::blank(puzzle.clues.dims);
-    // The centre row, correct as far as it goes.
+    // The centre row, correct as far as it goes. The centre column is still missing,
+    // so the column clues do not match and the board is not finished.
     for x in 0..5u32 {
         partial.set(10 + x, FILLED).expect("in bounds");
     }
     assert!(!puzzle.is_solved(&partial));
+}
+
+#[test]
+fn crossing_out_the_blanks_is_optional() {
+    // The rule the project owner chose on 2026-10-23: a player who fills the right
+    // squares has finished, whether or not they marked the rest. The two boards below
+    // differ only in squares nobody has to touch, and the rules must agree about both.
+    let pattern = cross();
+    let puzzle = puzzle_from(&pattern);
+    let squares = filled_flags(&pattern);
+
+    let mut only_the_filled_ones = State::blank(puzzle.clues.dims);
+    let mut every_square_decided = State::blank(puzzle.clues.dims);
+    for (i, &filled) in squares.iter().enumerate() {
+        let index = u32::try_from(i).expect("a board this size fits");
+        if filled {
+            only_the_filled_ones.set(index, FILLED).expect("in bounds");
+            every_square_decided.set(index, FILLED).expect("in bounds");
+        } else {
+            every_square_decided.set(index, EMPTY).expect("in bounds");
+        }
+    }
+
+    assert!(
+        squares.iter().any(|&filled| !filled),
+        "this test needs a pattern with blank squares in it"
+    );
+    assert_ne!(
+        only_the_filled_ones, every_square_decided,
+        "the two boards must really differ, or this test checks nothing"
+    );
+    assert!(puzzle.is_solved(&only_the_filled_ones));
+    assert!(puzzle.is_solved(&every_square_decided));
+}
+
+#[test]
+fn a_witness_that_leaves_a_square_undecided_is_refused_even_though_it_is_solved() {
+    // Crossing out became optional for *players*. A stored answer is a different thing
+    // and is still required to be a whole board, so these two now disagree on purpose.
+    // If `publish` ever starts accepting a half-marked witness, this is the test that
+    // says so.
+    let pattern = cross();
+    let puzzle = puzzle_from(&pattern);
+    let squares = filled_flags(&pattern);
+    let mut half_marked = State::blank(puzzle.clues.dims);
+    for (i, &filled) in squares.iter().enumerate() {
+        if filled {
+            half_marked
+                .set(u32::try_from(i).expect("fits"), FILLED)
+                .expect("in bounds");
+        }
+    }
+
+    // The engine is happy with it as a finished board...
+    assert!(puzzle.is_solved(&half_marked));
+    // ...and publication is not.
+    assert!(
+        matches!(replay_of(&puzzle, &half_marked), Replay::Refused(_)),
+        "a witness with an undecided square must not be recorded as reproduced"
+    );
+
+    // The anti-vacuity half: the same answer, fully marked, is accepted. Without this
+    // the test above would pass against a `replay_of` that refused everything.
+    let mut fully_marked = half_marked.clone();
+    for (i, &filled) in squares.iter().enumerate() {
+        if !filled {
+            fully_marked
+                .set(u32::try_from(i).expect("fits"), EMPTY)
+                .expect("in bounds");
+        }
+    }
+    assert!(matches!(
+        replay_of(&puzzle, &fully_marked),
+        Replay::Reproduced(_)
+    ));
 }
 
 #[test]
