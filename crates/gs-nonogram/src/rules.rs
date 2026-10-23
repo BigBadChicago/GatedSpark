@@ -10,6 +10,15 @@ use crate::line::Mark;
 
 pub const FAMILY: FamilyId = FamilyId("nonogram");
 
+/// Which version of Nonogram's semantics this build implements.
+///
+/// Named rather than written as a literal inside [`Nonogram::new`], because a reader
+/// has to be able to compare a stored package's `ruleset_version` against it. A replay
+/// against different semantics is not a replay, so a reader that found a version it
+/// does not implement has to refuse the package rather than attempt it — and it cannot
+/// do that without something to compare to.
+pub const RULESET_VERSION: u32 = 1;
+
 /// The three cell values, as integers. Exact and small; see `gs_core::state`.
 pub const EMPTY: Cell = Cell(0);
 pub const FILLED: Cell = Cell(1);
@@ -48,7 +57,10 @@ pub struct Nonogram {
 impl Nonogram {
     #[must_use]
     pub fn new(clues: Clues) -> Self {
-        Nonogram { clues, version: 1 }
+        Nonogram {
+            clues,
+            version: RULESET_VERSION,
+        }
     }
 
     /// The puzzle's rules in the shared DSL.

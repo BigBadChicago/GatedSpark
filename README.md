@@ -18,6 +18,7 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 | `crates/gs-solver` | Runs a real SMT solver as a separate program and turns every failure into "nobody knows". |
 | `crates/gs-store` | The puzzle store: a plain folder of plain files, one folder per puzzle, named by the puzzle's fingerprint. |
 | `crates/gs-cli` | The `gatedspark` command: make a key, fill a store, read a report, re-check the lot. |
+| `crates/gs-web` | The browser's half: open a signed puzzle and refuse everything else. It cannot reach a solver or a folder, and a test holds that. |
 | `docs/adr/` | Architecture decision records, including the language, solver and toolchain choices. |
 | `scripts/` | One-time setup for Windows machines. See *On Windows, run the setup script once* below. |
 
@@ -68,9 +69,8 @@ prints something unparseable, or prints two contradictory answers — into "nobo
 "the puzzle is unique". The reasoning is in
 [`docs/adr/0007-running-a-real-solver.md`](docs/adr/0007-running-a-real-solver.md).
 
-Piece two is the store and the command, described in the next section. Piece three is the browser
-version: the core compiled to WebAssembly, so the same verified code runs on the web and later on a
-desktop.
+Piece two is the store and the command, described in the next section. Piece three carries the
+trust chain into a browser, and is described below it.
 
 ## One command, end to end
 
@@ -114,6 +114,65 @@ Three refusals are worth knowing about, because they are the reason the commands
 
 The store and the command, and what each refusal is for, are in
 [`docs/adr/0008-the-store-and-the-command.md`](docs/adr/0008-the-store-and-the-command.md).
+
+## The browser
+
+Piece three of M5 is `gs-web`: the core compiled to WebAssembly, so the same verified code can run
+on the web now and on a desktop later without being rewritten. It loads a puzzle file that
+`gatedspark fill` wrote, **checks the signature itself** against a key the page ships with, and
+refuses everything else. The compressed download is 57 KB.
+
+Nothing is playable yet. This piece deliberately stops at the point the trust chain reaches the
+browser, because that is the part that could have turned out to be impossible.
+
+The thing worth knowing about it came from a measurement taken before any of it was designed:
+**every crate in this workspace compiles for a browser, including the two that must never be in
+one.** `gs-store` reads directories and `gs-solver` starts programs, and a browser can do neither —
+but on that target those calls exist and simply do not work, so a browser built carelessly would
+not crash. The solver runner turns every failure into "nobody knows", the pipeline correctly refuses
+to treat that as a proof, and the result is a browser in which **no puzzle is ever provably
+unique**. Every puzzle rejected, nothing visibly broken, and the cause three crates down a
+dependency list.
+
+So the dependency list is the boundary and a test holds it, rather than a note in a document:
+
+```text
+cargo test -p gs-web --test boundary
+```
+
+It walks the manifests, fails if either crate is compiled into `gs-web`, prints the path by which
+it arrived, and checks that the crates it forbids still exist under those names — because a guard
+naming a renamed crate passes while guarding nothing. Its first run failed for a reason worth
+keeping: `gs-nonogram` names `gs-solver` among its *test* dependencies, which puts nothing into
+anything that depends on `gs-nonogram`. The rule is now stated rather than assumed.
+
+One consequence kept on purpose: **nothing in the browser can produce a random number.** The only
+crate that wanted randomness was the key generator, and the browser neither generates puzzles nor
+signs anything.
+
+### Running the browser test
+
+One test in `gs-web` runs inside a real browser, because "compiles for a browser" and "works in a
+browser" are different claims. It needs three things that match each other:
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.129   # must match the wasm-bindgen dependency
+rustup target add wasm32-unknown-unknown
+CHROMEDRIVER=$(which chromedriver) \
+    cargo test -p gs-web --target wasm32-unknown-unknown --test in_a_real_browser
+```
+
+ChromeDriver's version has to match the browser's, and `wasm-bindgen-cli`'s has to match the
+`wasm-bindgen` dependency. Both mismatches read as a broken test rather than a setup problem, which
+is why CI prints all three versions before running anything.
+
+It is one file and deliberately not how this crate is tested: a test that needs a browser is a test
+that will eventually be skipped, so the native suite stays the measurement. This covers the narrow
+claim no native test can make — that the translation layer really carries data in and out, and that
+real SHA-256 and real Ed25519 give the same answers in a browser's WebAssembly engine.
+
+The reasoning for all of it is in
+[`docs/adr/0009-the-browser-version.md`](docs/adr/0009-the-browser-version.md).
 
 ## Building
 

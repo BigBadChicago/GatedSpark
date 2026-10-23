@@ -213,6 +213,13 @@ there are players. The thresholds are provisional and the module says so.
 | A mistyped option is an error rather than a silently ignored default | `command::a_misspelled_option_is_an_error_rather_than_being_ignored`, `..._an_option_with_no_value_is_an_error_rather_than_a_guess` |
 | A development signing key cannot be written into a repository or overwrite another | `command::keygen_refuses_to_write_inside_a_git_repository_and_writes_nothing`, `..._keygen_never_overwrites_an_existing_key`, `..._two_keys_are_different_keys` |
 | An empty folder becomes signed, solver-verified, replayable puzzles | `command::an_empty_folder_becomes_signed_verified_puzzles_and_then_rechecks`, against a real solver in CI |
+| The solver runner and the store are never compiled into the browser | `boundary::the_solver_runner_and_the_store_are_not_compiled_into_the_browser`, with `..._the_forbidden_crates_still_exist_under_those_names` as its anti-vacuity guard |
+| The browser recomputes a puzzle's fingerprint rather than believing it | `loading::the_fingerprint_is_recomputed_rather_than_believed` |
+| The browser refuses a puzzle signed by a key its page was not given | `loading::a_puzzle_signed_by_somebody_else_is_refused`, `..._a_page_that_trusts_nothing_accepts_nothing` |
+| Every single changed byte of a package is refused by the browser | `loading::every_single_changed_byte_is_refused` |
+| The browser refuses another family's puzzle, or another rules version, rather than attempting it | `loading::another_games_puzzle_is_refused_rather_than_attempted`, `..._a_puzzle_from_different_rules_is_refused_in_either_direction` |
+| A `Playable` can only be obtained by loading a verified package | structural: `load` is the only function returning one; recorded in ADR 0009's not-enforced list, since a negative cannot be proved |
+| The browser's translation layer works in a real browser | `in_a_real_browser::*`, six tests in headless Chrome, run in CI |
 
 Explicitly **not yet enforced**, and labelled as such in the code:
 
