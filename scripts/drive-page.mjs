@@ -888,7 +888,16 @@ console.log('games offered ' + JSON.stringify(bothGames));
 if (bothGames.length < 2) await fail('both games should be on the calendar', 'one-game');
 const other = bothGames[1];
 await page.evaluate((family) => window.gatedspark.chooseGame(family), other);
-await page.waitForFunction(() => window.gatedspark.boardIsShowing(), null, { timeout: 15000 });
+// Wait for the game that was asked for, not merely for a board. Choosing a game fetches
+// a puzzle, and the board already on the screen is the one before it: waiting on "a
+// board is showing" is satisfied straight away by the old one, and everything read next
+// is then half from the old game and half from the new. That is what made this check
+// report a game showing one set of rules and calling itself the other.
+await page.waitForFunction(
+  (family) => window.gatedspark.boardIsShowing() && window.gatedspark.family() === family,
+  other,
+  { timeout: 15000 }
+);
 const afterSwitch = await page.evaluate(() => ({
   family: window.gatedspark.family(),
   days: window.gatedspark.days(),
