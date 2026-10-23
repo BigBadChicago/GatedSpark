@@ -74,6 +74,25 @@ impl Page {
     }
 }
 
+impl Page {
+    /// The key list this page checks against.
+    ///
+    /// Not exposed to a web page: `#[wasm_bindgen]` is deliberately absent, so this is
+    /// reachable from the rest of this crate and from nowhere a page can call. The
+    /// saved-puzzle calls in [`crate::saved`] need the same list this page opens
+    /// puzzles with, and giving them a second copy to be configured separately is how
+    /// a device ends up trusting one set of keys for new puzzles and another for saved
+    /// ones.
+    pub(crate) fn keys(&self) -> &TrustedKeys {
+        &self.keys
+    }
+
+    /// The digest this page checks with. There is one, and this is it.
+    pub(crate) fn digest(&self) -> &Sha256 {
+        &Sha256
+    }
+}
+
 impl Default for Page {
     fn default() -> Self {
         Page::new()

@@ -18,9 +18,10 @@ distinct outcomes, and `UNKNOWN` never counts as a pass.
 | `crates/gs-solver` | Runs a real SMT solver as a separate program and turns every failure into "nobody knows". |
 | `crates/gs-store` | The puzzle store: a plain folder of plain files, one folder per puzzle, named by the puzzle's fingerprint. |
 | `crates/gs-cli` | The `gatedspark` command: make a key, fill a store, read a report, re-check the lot. |
+| `crates/gs-offline` | Puzzles kept on a device, so that losing signal does not end the game. No files, no network, and no idea what game it is holding. |
 | `crates/gs-web` | The browser's half: open a signed puzzle and refuse everything else. It cannot reach a solver or a folder, and a test holds that. |
 | `docs/adr/` | Architecture decision records, including the language, solver and toolchain choices. |
-| `scripts/` | One-time setup for Windows machines. See *On Windows, run the setup script once* below. |
+| `scripts/` | Setup for Windows, building the core for a browser, filling the page with real puzzles, and driving the page in a real browser. |
 
 The project's foundation documents, the build plan for this slice, and the content-delivery design
 live in the project's shared folder rather than in the repository.
@@ -62,8 +63,8 @@ What exists and is enforced by a test is listed in
 repository claims to be enforced without naming the test that enforces it; where something is not
 yet enforced, it says so.
 
-M5 is being built in four pieces, and all four exist. What is left of the slice is the offline
-buffer: five games stored, five ahead, one bookmark in a pre-shuffled order.
+M5 is built. Five pieces: the solver runner, the store and the command, the browser crate, the page,
+and the offline buffer.
 
 Piece one made a solver answerable from
 shipped code rather than from a test file: `gs-solver` runs a solver as a separate program and
@@ -72,9 +73,9 @@ prints something unparseable, or prints two contradictory answers — into "nobo
 "the puzzle is unique". The reasoning is in
 [`docs/adr/0007-running-a-real-solver.md`](docs/adr/0007-running-a-real-solver.md).
 
-Piece two is the store and the command, described in the next section. Piece three carries the
-trust chain into a browser. Piece four is the page a player actually taps on. Both are described
-below.
+Piece two is the store and the command, described in the next section. Piece three carries the trust
+chain into a browser. Piece four is the page a player actually taps on. Piece five keeps puzzles on
+the device so that losing signal does not end the game. All are described below.
 
 ## One command, end to end
 
@@ -124,7 +125,7 @@ The store and the command, and what each refusal is for, are in
 Piece three of M5 is `gs-web`: the core compiled to WebAssembly, so the same verified code can run
 on the web now and on a desktop later without being rewritten. It loads a puzzle file that
 `gatedspark fill` wrote, **checks the signature itself** against a key the page ships with, and
-refuses everything else. The compressed download is 57 KB.
+refuses everything else. The compressed download is 62 KB.
 
 A puzzle is also playable: marking squares, undo and redo, and knowing when it is solved. And there
 is now a page to play it on, below. What is still missing is the offline buffer.
@@ -227,6 +228,52 @@ its **filled** squares match the clues, and crossing out is a note the player ke
 The same puzzle now takes 93 taps. Missing a filled square still leaves it unfinished, and a
 *stored* answer must still decide every square — `publish::replay_of` requires that separately. See
 ADR 0010.
+
+
+## Playing with no signal
+
+`gs-offline` is what a device keeps so that losing signal does not end the game. Three rules, agreed
+before it was written:
+
+- **Five ahead.** The device holds five unplayed puzzles, downloaded in advance.
+- **Delivered is not played.** Bytes arriving is not a player playing. Downloading five leaves five;
+  the count drops when somebody actually finishes one. Counting a download as a play would quietly
+  burn puzzles nobody opened.
+- **One bookmark in a shuffled order.** Instead of a record of every puzzle a player has finished,
+  one number saying how far along their own shuffled list they are. One number per level rather than
+  one row per puzzle played, which keeps the one thing that *does* grow with the number of players
+  from growing without bound.
+
+**The crate knows about no game and no device.** It decides how many to hold, which is next, and what
+counts as played. Where the bytes live is four operations — put, get, remove, list — supplied by
+whatever is hosting it, because a browser has no folders and the crate in this workspace that does
+use folders is the one a browser is forbidden from carrying. It does not know about Nonogram either:
+every package in its own tests is sealed with a family that does not exist, carrying a payload that
+is not a puzzle, and the buffer handles all of them without noticing.
+
+**Everything is checked on the way out, every time.** A device's storage is not trusted. In a browser
+it is `localStorage`, a few clicks from being edited by hand in the developer tools, so a saved
+puzzle is checked against the trusted key as it leaves, exactly as one off the network is. There is
+a test that plants an edited puzzle in a real browser's storage and requires it to be refused.
+
+**Reading never deletes.** Anything that fails its checks is skipped, counted and left alone.
+Throwing it away is a separate call somebody makes on purpose: a puzzle that fails today because the
+device's storage is misbehaving would be gone forever if reading deleted it, and a player with no
+signal would have nothing left.
+
+**The order only ever grows at the end.** New puzzles join the end of a player's shuffled list and
+nothing already behind the bookmark moves. If the order could be reshuffled, a bookmark part way
+along would point at a different puzzle tomorrow than it did today.
+
+On the page there is a "Save this one for later" button, a "Play a saved one" button, a line saying
+how many are saved and how many more there is room for, and a switch that pretends the signal is
+gone so the whole thing can be tried without unplugging anything. Running out says so in a sentence:
+*"There are no more puzzles saved on this device. Connect to the internet to get some more."*
+
+What is **not** here, and is the last remaining hole in the offline story: withdrawing a puzzle that
+has already been downloaded. Throwing away damaged files is covered; telling a device to stop playing
+a perfectly signed puzzle is not, and needs an agreed way of publishing "do not play these". ADR 0011
+records it.
 
 ## Building
 

@@ -231,8 +231,17 @@ there are players. The thresholds are provisional and the module says so.
 | Switching puzzles rebuilds the grid and forgets the old game | `drive-page.mjs` — by hand |
 | A package with one byte changed is refused by the page, in readable words | `drive-page.mjs` — by hand |
 
+| A puzzle saved on a device is checked again on the way out, every time | `gs-offline/tests/buffering.rs::a_puzzle_that_was_edited_on_the_shelf_is_never_handed_over`, `in_a_real_browser.rs::a_saved_puzzle_edited_in_the_browsers_storage_is_never_handed_over` |
+| Being handed a saved puzzle is not having played it | `buffering.rs::being_handed_a_puzzle_is_not_the_same_as_having_played_it`, `in_a_real_browser.rs::being_handed_a_saved_puzzle_is_not_the_same_as_having_played_it` |
+| The buffer knows about no game and no device | `buffering.rs::the_buffer_holds_a_package_from_a_family_that_does_not_exist`, and `gs-offline`'s dependency list |
+| Reading the buffer never deletes anything | `buffering.rs::reading_the_buffer_never_throws_anything_away_by_itself` |
+| A player's shuffled order never moves what is already behind the bookmark | `ordering.rs::growing_the_pool_never_moves_anything_already_in_the_order`, `nothing_already_played_is_ever_handed_out_again_after_the_pool_grows` |
+
 Explicitly **not yet enforced**, and labelled as such in the code:
 
+- **Withdrawing a puzzle already downloaded.** A device holding a perfectly signed puzzle that
+  should no longer be played has no way of being told. Damaged and tampered files are covered;
+  this is not, and it is the last remaining hole in the offline story. See ADR 0011.
 - **The page is only checked by hand.** `scripts/check-page.sh` drives the real page in a real
   browser and is the only thing that tests the page at all, but it is not in CI: it needs a
   browser-driving dependency this project has not taken on. The wasm tests in CI prove the *core*

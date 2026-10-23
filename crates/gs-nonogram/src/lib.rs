@@ -29,7 +29,11 @@ pub mod difficulty;
 pub mod generate;
 pub mod line;
 pub mod publish;
-pub mod rng;
+/// The workspace's deterministic generator, which lives in the core.
+///
+/// Re-exported under its old path: generation still reaches for `rng::Rng` and the
+/// recorded seeds in every validation report mean the same thing they always did.
+pub use gs_core::rng;
 pub mod rules;
 pub mod smtlib;
 pub mod solve;

@@ -196,6 +196,102 @@ await page.screenshot({ path: OUT + '/refused.png', fullPage: true });
 if (!refusal.shown) await fail('a changed puzzle was not refused', 'not-refused');
 if (/NotPlayable|Err\(/.test(refusal.words)) await fail('the refusal is not in words a person reads', 'jargon');
 
+// ---------------------------------------------------------------------------
+// The offline buffer, through the page
+// ---------------------------------------------------------------------------
+
+await page.evaluate(() => window.gatedspark.forgetEverythingSaved());
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
+
+const blank = await page.evaluate(() => window.gatedspark.savedLine());
+console.log('saved at the start ' + JSON.stringify(blank));
+if (!/No puzzles saved/.test(blank)) await fail('a fresh device should say it has nothing saved', 'saved-blank');
+if (!/Room for 5 more/.test(blank)) await fail('it should know it has room for five', 'saved-blank');
+
+// Save the one on screen, and two more.
+const names = await page.evaluate(() => Array.from(document.getElementById('pick').options, (o) => o.value));
+for (const name of names.slice(0, 3)) {
+  await page.selectOption('#pick', name);
+  await page.waitForFunction((n) => document.getElementById('fingerprint').textContent === n, name, { timeout: 10000 });
+  await page.evaluate(() => window.gatedspark.save());
+}
+const afterSaving = await page.evaluate(() => window.gatedspark.savedLine());
+console.log('after saving three ' + JSON.stringify(afterSaving));
+if (!/3 puzzles saved/.test(afterSaving)) await fail('three saved puzzles should be reported', 'saved-three');
+if (!/Room for 2 more/.test(afterSaving)) await fail('and room for two more', 'saved-three');
+
+// Saving the same one again changes nothing: the name is the fingerprint.
+await page.evaluate(() => window.gatedspark.save());
+if (!/3 puzzles saved/.test(await page.evaluate(() => window.gatedspark.savedLine()))) {
+  await fail('saving the same puzzle twice must not count twice', 'saved-twice');
+}
+
+// Now cut the signal. Fetching must fail and saved play must work.
+await page.evaluate(() => window.gatedspark.toggleOffline());
+await page.evaluate((n) => window.gatedspark.open(n), names[0]);
+const offlineRefusal = await page.evaluate(() => window.gatedspark.refusal());
+console.log('fetching with no signal ' + JSON.stringify(offlineRefusal));
+if (!offlineRefusal || !/no signal/.test(offlineRefusal)) {
+  await fail('fetching with no signal should be refused in words', 'offline-fetch');
+}
+await page.screenshot({ path: OUT + '/no-signal.png', fullPage: true });
+
+await page.evaluate(() => window.gatedspark.playSaved());
+const playingSaved = await page.evaluate(() => ({
+  refusal: window.gatedspark.refusal(),
+  fingerprint: window.gatedspark.fingerprint(),
+  saved: window.gatedspark.savedLine(),
+  squares: document.querySelectorAll('td.square').length,
+}));
+console.log('playing a saved one with no signal ' + JSON.stringify(playingSaved));
+if (playingSaved.refusal) await fail('a saved puzzle should open with no signal', 'saved-play');
+if (playingSaved.squares === 0) await fail('a saved puzzle should draw a board', 'saved-play');
+if (!/3 puzzles saved/.test(playingSaved.saved)) {
+  await fail('being handed a saved puzzle is not playing it, so the count must not drop', 'delivered-not-played');
+}
+await page.screenshot({ path: OUT + '/playing-saved.png', fullPage: true });
+
+// Finish it. Only now does the count drop.
+const savedAnswer = filledSquares(`${WWW}/store/${playingSaved.fingerprint}/witness.bin`);
+await page.evaluate((filled) => {
+  for (const [row, column] of filled) window.gatedspark.tap(row, column);
+}, savedAnswer.filled);
+const afterFinishing = await page.evaluate(() => ({
+  solved: window.gatedspark.isSolved(),
+  saved: window.gatedspark.savedLine(),
+}));
+console.log('after finishing it ' + JSON.stringify(afterFinishing));
+if (!afterFinishing.solved) await fail('the saved puzzle did not solve', 'saved-solve');
+if (!/2 puzzles saved/.test(afterFinishing.saved)) {
+  await fail('finishing a saved puzzle should use it up, got: ' + afterFinishing.saved, 'played');
+}
+await page.screenshot({ path: OUT + '/saved-solved.png', fullPage: true });
+
+// Play the last two out, and check the ending is a sentence rather than a blank screen.
+for (let i = 0; i < 2; i += 1) {
+  await page.evaluate(() => window.gatedspark.playSaved());
+  const fingerprint = await page.evaluate(() => window.gatedspark.fingerprint());
+  const answer = filledSquares(`${WWW}/store/${fingerprint}/witness.bin`);
+  await page.evaluate((filled) => {
+    for (const [row, column] of filled) window.gatedspark.tap(row, column);
+  }, answer.filled);
+}
+await page.evaluate(() => window.gatedspark.playSaved());
+const ranOut = await page.evaluate(() => ({
+  refusal: window.gatedspark.refusal(),
+  saved: window.gatedspark.savedLine(),
+}));
+console.log('after playing them all ' + JSON.stringify(ranOut));
+if (!ranOut.refusal) await fail('running out should say something', 'ran-out');
+if (!/no more puzzles/i.test(ranOut.refusal) || !/internet/i.test(ranOut.refusal)) {
+  await fail('running out should say what happened and what to do: ' + ranOut.refusal, 'ran-out');
+}
+if (/NothingToPlay|Empty/.test(ranOut.refusal)) {
+  await fail('running out should not show a type name: ' + ranOut.refusal, 'ran-out');
+}
+await page.screenshot({ path: OUT + '/ran-out.png', fullPage: true });
+
 console.log('console problems ' + JSON.stringify(problems));
 await browser.close();
 if (problems.length) { console.log('FAIL: the browser reported errors'); process.exit(1); }

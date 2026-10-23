@@ -85,6 +85,7 @@ fn the_browser_contains_exactly_what_it_is_supposed_to() {
             "gs-core".to_owned(),
             "gs-crypto".to_owned(),
             "gs-nonogram".to_owned(),
+            "gs-offline".to_owned(),
             "gs-web".to_owned(),
         ],
         "what is compiled into the browser changed. That is a decision, not a detail."
