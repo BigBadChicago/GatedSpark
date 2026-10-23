@@ -909,10 +909,15 @@ fn both_games_can_be_saved_on_one_device_at_once() {
     page.save_for_later(&loop_puzzle).expect("saved");
     assert_eq!(packages_in_storage(), 2);
 
-    let mut families = vec![
-        page.next_saved().expect("one").family(),
-        page.next_saved().expect("the other").family(),
-    ];
+    // Being handed one and having played it are different things, so the second puzzle
+    // comes out only once the first is marked played. Asking twice in a row would hand
+    // back the same puzzle twice, which is the buffer working, not failing.
+    let first = page.next_saved().expect("one");
+    let first_family = first.family();
+    page.mark_played(&first.fingerprint()).expect("recorded");
+
+    let second = page.next_saved().expect("the other");
+    let mut families = vec![first_family, second.family()];
     families.sort();
     assert_eq!(families, vec!["nonogram", "slitherlink"]);
 }
