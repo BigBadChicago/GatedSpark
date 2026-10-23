@@ -33,3 +33,4 @@ pub mod board;
 pub mod clues;
 pub mod loops;
 pub mod rules;
+pub mod smtlib;
