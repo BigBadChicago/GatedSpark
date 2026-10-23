@@ -38,14 +38,18 @@ use std::process::Command;
 use std::time::Duration;
 
 use common::{add_rectangle, board, nothing_drawn, rectangle_loop};
+use gs_core::report::NotPublishable;
 use gs_core::ruleset::Ruleset;
 use gs_core::state::State;
 use gs_core::verification::Outcome;
 use gs_slitherlink::board::Geometry;
 use gs_slitherlink::clues::Clues;
+use gs_slitherlink::generate::{batch, Shape, REMOVAL_BUDGET};
 use gs_slitherlink::loops::Loop;
+use gs_slitherlink::publish::{filter_and_solver_agree, report_for};
 use gs_slitherlink::rules::Slitherlink;
 use gs_slitherlink::smtlib::{solvability_query, uniqueness_query};
+use gs_slitherlink::solve::Budget;
 use gs_solver::{ExternalSolver, NoVerdict, TimeLimit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,6 +348,62 @@ fn relabelling_the_same_loop_is_not_a_second_answer() {
             "the same board labelled differently is the same board"
         );
     });
+}
+
+#[test]
+fn the_whole_pipeline_produces_reports_a_real_solver_agrees_with() {
+    // The exit test for making puzzles: generated puzzles, not hand-written ones, all
+    // the way through to a validation report, with a real solver answering both
+    // questions.
+    //
+    // It matters more here than the fixtures above, because the generator decides what
+    // to keep using **our** solver. If our solver and a real one disagreed about
+    // uniqueness, every puzzle this family makes would be suspect, and nothing else in
+    // the repository would notice.
+    let shape = Shape::middling(5, 5);
+    let (kept, report) = batch(0..6, shape, REMOVAL_BUDGET);
+    assert!(report.is_consistent(), "{report:?}");
+    assert!(!kept.is_empty(), "six seeds produced no puzzle at all");
+
+    with_solvers(&format!("the pipeline: {} puzzles", kept.len()), |solver| {
+        for candidate in &kept {
+            let report =
+                report_for(candidate, &AsVerifier(solver), Budget::default()).expect("askable");
+            assert_eq!(
+                report.publishable(),
+                Err(NotPublishable::NoContentId),
+                "seed {}: a generated puzzle must pass every check but the \
+                     fingerprint it does not have yet",
+                candidate.seed
+            );
+            assert!(
+                filter_and_solver_agree(candidate, &report),
+                "seed {}: our own solver and {} disagree, which is a fault in us",
+                candidate.seed,
+                solver.name
+            );
+        }
+    });
+}
+
+/// Lets the pipeline ask the solver under test.
+///
+/// Panics where `gs-solver` would answer `Unknown` for any reason but the solver's
+/// own `unknown`, for the reason [`Solver::ask`] does: in this job, no verdict on our
+/// own encoding means the encoding is malformed and must stop the build.
+struct AsVerifier<'a>(&'a Solver);
+
+impl gs_slitherlink::publish::Verifier for AsVerifier<'_> {
+    fn name(&self) -> &'static str {
+        "solver under test"
+    }
+    fn ask(&self, query: &str) -> Outcome {
+        match self.0.ask(query, "a query from the pipeline") {
+            Answer::Sat => Outcome::Sat,
+            Answer::Unsat => Outcome::Unsat,
+            Answer::Unknown => Outcome::Unknown,
+        }
+    }
 }
 
 #[test]
