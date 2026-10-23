@@ -253,7 +253,7 @@
   <p class="saved-line" id="today-line">Looking for today&rsquo;s puzzle&hellip;</p>
 
   <section class="saved">
-    <p class="saved-line" id="saved-line">Checking what is saved on this device…</p>
+    <p class="saved-line" id="saved-line" role="status" aria-live="polite">Checking what is saved on this device…</p>
     <div class="controls">
       <button id="save" type="button">Save this one for later</button>
       <button id="save-ahead" type="button">Save the next few days</button>
@@ -263,10 +263,15 @@
     </div>
   </section>
 
-  <p id="refused" class="refused" hidden></p>
+  <p id="refused" class="refused" role="alert" hidden></p>
 
   <div id="game" hidden>
-    <p id="solved" class="solved" hidden>Solved. Every clue matches.</p>
+    <!-- The lines that speak to the player are live regions. Without that a screen
+         reader never reads them: the text changes and nothing announces it, so the
+         solved message, the refusal and the running commentary are seen and not heard.
+         "polite" waits for a pause; the refusal is an alert because it means the board
+         in front of you has gone away. -->
+    <p id="solved" class="solved" role="status" aria-live="polite" hidden>Solved. Every clue matches.</p>
 
     <details class="rules" id="rules">
       <summary id="rules-title">How to play</summary>
@@ -277,7 +282,7 @@
       <table class="board" id="board"></table>
       <svg id="loop" hidden xmlns="http://www.w3.org/2000/svg" role="group"></svg>
     </div>
-    <p class="shape" id="shape" hidden></p>
+    <p class="shape" id="shape" role="status" aria-live="polite" hidden></p>
 
     <div class="controls">
       <button id="undo" type="button">Undo</button>
@@ -287,9 +292,10 @@
       <span class="count" id="moves">No moves yet</span>
     </div>
     <!-- `role="status"` so a screen reader reads a hint out when it arrives. A hint a
-         player cannot hear is not a hint for everybody. -->
+         player cannot hear is not a hint for everybody. Separate from the status line
+         below, which the next tap wipes: a hint is worth reading twice. -->
     <p id="hint-said" class="hint-said" role="status" aria-live="polite" hidden></p>
-    <p class="note" id="note">Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.</p>
+    <p class="note" id="note" role="status" aria-live="polite">Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.</p>
 
     <section class="trust">
       <h2>What this page checked</h2>
@@ -332,6 +338,35 @@ const NEXT = {
   [Square.Filled]: Square.Empty,
   [Square.Empty]: Square.Unknown,
 };
+
+/** What each mark is called out loud. The board shows a square's state by how it is
+ *  drawn; somebody listening to the page gets nothing from that, so every square and
+ *  every line says its state in its own name as well. These are the only words for it,
+ *  so a state that gains a look without gaining a word cannot happen quietly. */
+const SQUARE_SAID = {
+  [Square.Unknown]: "blank",
+  [Square.Filled]: "filled",
+  [Square.Empty]: "crossed out",
+};
+
+const LINE_SAID = {
+  [Drawn.Unknown]: "not decided",
+  [Drawn.Yes]: "drawn",
+  [Drawn.No]: "ruled out",
+};
+
+/** A square's whole name: where it is, and what is in it. */
+function squareName(row, column, mark) {
+  return `row ${row + 1}, column ${column + 1}, ${SQUARE_SAID[mark] ?? "blank"}`;
+}
+
+/** A line's whole name. Same shape, same reason. */
+function lineName(side, column, row, drawn) {
+  const where = side === Side.Across
+    ? `line across from dot ${column + 1}, ${row + 1}`
+    : `line down from dot ${column + 1}, ${row + 1}`;
+  return `${where}, ${LINE_SAID[drawn] ?? "not decided"}`;
+}
 
 /** The same for a line: undecided, drawn, ruled out, undecided. */
 const NEXT_LINE = {
@@ -450,6 +485,7 @@ function drawBoard() {
   for (let column = 0; column < width; column += 1) {
     const th = document.createElement("th");
     th.className = "col-clue";
+    th.scope = "col";
     const runs = Array.from(game.column_clue(column));
     th.replaceChildren(
       ...(runs.length ? runs : [0]).map((run) =>
@@ -465,6 +501,7 @@ function drawBoard() {
     const runs = Array.from(game.row_clue(row));
     tr.appendChild(
       Object.assign(document.createElement("th"), {
+        scope: "row",
         className: "row-clue",
         textContent: (runs.length ? runs : [0]).join(" "),
       })
@@ -480,7 +517,7 @@ function drawBoard() {
       td.dataset.column = String(column);
       td.tabIndex = 0;
       td.setAttribute("role", "button");
-      td.setAttribute("aria-label", `row ${row + 1}, column ${column + 1}`);
+      td.setAttribute("aria-label", squareName(row, column, Square.Unknown));
       tr.appendChild(td);
     }
     table.appendChild(tr);
@@ -542,12 +579,7 @@ function drawLoopBoard() {
     edge.dataset.side = String(side);
     edge.dataset.column = String(column);
     edge.dataset.row = String(row);
-    edge.setAttribute(
-      "aria-label",
-      side === Side.Across
-        ? `line across from dot ${column + 1}, ${row + 1}`
-        : `line down from dot ${column + 1}, ${row + 1}`
-    );
+    edge.setAttribute("aria-label", lineName(side, column, row, Drawn.Unknown));
     edge.appendChild(svg("line", { class: "grab", x1, y1, x2, y2 }));
     edge.appendChild(svg("line", { class: "line", x1, y1, x2, y2 }));
     edge.appendChild(svg("line", { class: "ruled", x1: mx - 4, y1: my - 4, x2: mx + 4, y2: my + 4 }));
@@ -573,6 +605,10 @@ function refreshLoop() {
   const edges = el("loop").querySelectorAll("g.edge");
   edges.forEach((edge, i) => {
     edge.dataset.drawn = String(marks[i]);
+    edge.setAttribute(
+      "aria-label",
+      lineName(Number(edge.dataset.side), Number(edge.dataset.column), Number(edge.dataset.row), marks[i])
+    );
   });
 
   // Which numbers are still unmet, so the met ones can fade. Taken from the rules,
@@ -671,7 +707,12 @@ function refresh() {
     for (const td of el("board").querySelectorAll("td.square")) {
       const row = Number(td.dataset.row);
       const column = Number(td.dataset.column);
-      td.dataset.mark = String(board[row * width + column]);
+      const mark = board[row * width + column];
+      td.dataset.mark = String(mark);
+      // The name is reset here rather than in `tap`, because the core can change a
+      // square the player did not touch (undo, redo, loading a saved game). A name
+      // updated only where it was tapped would drift from the board it describes.
+      td.setAttribute("aria-label", squareName(row, column, mark));
     }
   }
 
