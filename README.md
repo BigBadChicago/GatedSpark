@@ -220,9 +220,13 @@ puzzles forgets the old game, and that a package with one byte altered is refuse
 person can read. It is not in CI: it needs a browser-driving dependency this project has not taken
 on, and that is a decision worth making on purpose. Run it by hand before changing the page.
 
-One thing it found, which is a question rather than a bug: finishing a 15 by 15 puzzle took **372
-taps** for 93 filled squares, because `is_solved` requires every blank to be crossed out too. Most
-nonograms treat crossing out as optional. See ADR 0010.
+One thing it found, which was a question rather than a bug: finishing a 15 by 15 puzzle used to take
+**372 taps** for 93 filled squares, because a board counted as finished only when every blank had
+been crossed out too. On 2026-10-23 that rule was changed, by decision: a puzzle is finished when
+its **filled** squares match the clues, and crossing out is a note the player keeps for themselves.
+The same puzzle now takes 93 taps. Missing a filled square still leaves it unfinished, and a
+*stored* answer must still decide every square — `publish::replay_of` requires that separately. See
+ADR 0010.
 
 ## Building
 

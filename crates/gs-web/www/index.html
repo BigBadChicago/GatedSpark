@@ -185,7 +185,7 @@
       <button id="redo" type="button">Redo</button>
       <span class="count" id="moves">No moves yet</span>
     </div>
-    <p class="note" id="note">Tap a square once to fill it, again to cross it out, again to clear it.</p>
+    <p class="note" id="note">Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.</p>
 
     <section class="trust">
       <h2>What this page checked</h2>
@@ -348,7 +348,7 @@ function openBytes(bytes) {
   drawBoard();
   refresh();
   el("note").textContent =
-    "Tap a square once to fill it, again to cross it out, again to clear it.";
+    "Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.";
   el("game").hidden = false;
 }
 

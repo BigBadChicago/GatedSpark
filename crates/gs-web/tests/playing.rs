@@ -153,7 +153,7 @@ fn playing_the_real_answer_solves_the_puzzle() {
 }
 
 #[test]
-fn a_board_one_square_short_is_not_solved() {
+fn a_board_one_filled_square_short_is_not_solved() {
     // The anti-vacuity half. If `is_solved` returned true for anything, the test above
     // would pass while meaning nothing.
     let puzzle = a_loaded_puzzle();
@@ -162,20 +162,76 @@ fn a_board_one_square_short_is_not_solved() {
     play_the_answer(&mut session, &answer);
     assert!(session.is_solved());
 
-    // Clear one square, which is a move rather than an undo.
-    let a_decided_square = answer
+    // Clear one *filled* square, which is a move rather than an undo.
+    let a_filled_square = answer
         .iter()
-        .position(|&m| m != Mark::Unknown)
-        .expect("the answer decides at least one square");
+        .position(|&m| m == Mark::Filled)
+        .expect("any real answer fills at least one square");
     session
-        .mark(
-            u32::try_from(a_decided_square).expect("fits"),
-            Mark::Unknown,
-        )
-        .expect("clearing a decided square is a legal move");
+        .mark(u32::try_from(a_filled_square).expect("fits"), Mark::Unknown)
+        .expect("clearing a filled square is a legal move");
     assert!(
         !session.is_solved(),
-        "a board with an undecided square is not solved"
+        "a board missing one of its filled squares is not solved"
+    );
+}
+
+#[test]
+fn clearing_a_crossed_out_square_leaves_the_puzzle_solved() {
+    // The other side of the rule the owner chose on 2026-10-23: crossing a square out
+    // is a note to the player and nothing more, so taking the note away cannot unfinish
+    // a finished puzzle. Paired with the test above, which is what stops this one
+    // turning into "nothing ever unfinishes a puzzle".
+    let puzzle = a_loaded_puzzle();
+    let answer = the_answer(&puzzle);
+    let blank_squares = answer.iter().filter(|&&m| m == Mark::Empty).count();
+    assert!(
+        blank_squares > 0,
+        "this test needs a puzzle whose answer leaves some squares blank"
+    );
+    let mut session = Session::start(puzzle);
+    play_the_answer(&mut session, &answer);
+    assert!(session.is_solved());
+
+    for (i, &mark) in answer.iter().enumerate() {
+        if mark != Mark::Empty {
+            continue;
+        }
+        session
+            .mark(u32::try_from(i).expect("fits"), Mark::Unknown)
+            .expect("clearing a crossed-out square is a legal move");
+    }
+    assert!(
+        session.is_solved(),
+        "taking every cross off a finished board must leave it finished"
+    );
+}
+
+#[test]
+fn a_board_with_only_its_filled_squares_marked_is_solved() {
+    // The rule stated directly, from a blank board rather than by taking marks off a
+    // finished one: a player who fills the right squares and crosses out nothing has
+    // finished. This is the whole of the change made on 2026-10-23.
+    let puzzle = a_loaded_puzzle();
+    let answer = the_answer(&puzzle);
+    let mut session = Session::start(puzzle);
+
+    for (i, &mark) in answer.iter().enumerate() {
+        if mark == Mark::Filled {
+            session
+                .mark(u32::try_from(i).expect("fits"), Mark::Filled)
+                .expect("filling a square is a legal move");
+        }
+    }
+
+    assert_eq!(
+        session.moves_made(),
+        u32::try_from(answer.iter().filter(|&&m| m == Mark::Filled).count()).expect("fits"),
+        "only the filled squares should have been touched"
+    );
+    assert!(
+        session.is_solved(),
+        "filling the right squares and nothing else must finish the puzzle"
     );
 }
 
@@ -233,6 +289,23 @@ fn solving_then_undoing_one_move_is_no_longer_solved() {
     let answer = the_answer(&puzzle);
     let mut session = Session::start(puzzle);
     play_the_answer(&mut session, &answer);
+    // End on a filled square, so that the move being undone is one the rules care
+    // about. Since 2026-10-23 undoing a cross-out does not unfinish a board, so an
+    // answer whose last square happens to be blank would make this test pass for the
+    // wrong reason.
+    let a_filled_square = u32::try_from(
+        answer
+            .iter()
+            .position(|&m| m == Mark::Filled)
+            .expect("fills"),
+    )
+    .expect("fits");
+    session
+        .mark(a_filled_square, Mark::Unknown)
+        .expect("clearing a filled square is a legal move");
+    session
+        .mark(a_filled_square, Mark::Filled)
+        .expect("filling it back in is a legal move");
     assert!(session.is_solved());
 
     session.undo().expect("there are moves to undo");

@@ -113,10 +113,9 @@ await page.evaluate((answer) => {
     const column = Number(td.dataset.column);
     while (Number(td.dataset.mark) !== 2) w.tap(row, column);
   }
-  // One tap fills. Two cross out. The rules call a board finished only when every
-  // square has been decided one way or the other, so the blanks get crossed too.
+  // One tap each, on the filled squares only. Crossing out the blanks is optional for
+  // a player, so this is the shortest honest way to finish the puzzle.
   for (const [row, column] of answer.filled) w.tap(row, column);
-  for (const [row, column] of answer.empty) { w.tap(row, column); w.tap(row, column); }
 }, answer);
 
 const end = await page.evaluate(() => ({
@@ -129,6 +128,27 @@ console.log('end ' + JSON.stringify(end));
 await page.screenshot({ path: OUT + '/solved.png', fullPage: true });
 if (!end.coreSaysSolved) await fail('the real answer did not solve it', 'not-solved');
 if (!end.pageSaysSolved) await fail('the core says solved and the page does not show it', 'not-shown');
+
+// Crossing out the blanks is allowed, and must not unfinish the board.
+await page.evaluate((empty) => {
+  for (const [row, column] of empty) {
+    window.gatedspark.tap(row, column); // undecided to filled
+    window.gatedspark.tap(row, column); // filled to crossed out
+  }
+}, answer.empty);
+const withCrosses = await page.evaluate(() => ({
+  page: !document.getElementById('solved').hidden,
+  core: window.gatedspark.isSolved(),
+  moves: document.getElementById('moves').textContent,
+}));
+console.log('with every blank crossed out ' + JSON.stringify(withCrosses));
+if (!withCrosses.core) await fail('crossing out the blanks unfinished the board', 'crosses');
+for (const [row, column] of answer.empty) {
+  await page.evaluate(([r, c]) => window.gatedspark.tap(r, c), [row, column]);
+}
+if (!await page.evaluate(() => window.gatedspark.isSolved())) {
+  await fail('taking the crosses off again unfinished the board', 'crosses-off');
+}
 
 // One square away is not solved. This is the guard that makes the line above mean
 // something: a page that always showed the banner would have passed up to here.

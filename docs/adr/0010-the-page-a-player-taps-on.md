@@ -56,18 +56,32 @@ by `reads_as_words`, which refuses any string containing a lowercase letter imme
 followed by a capital — which is what a type name looks like and what English does not.
 The project's own name is the one exception and is named in the code.
 
-### Every square must be decided
+### Crossing out the blanks is optional
 
-`Nonogram::is_solved` requires every square to be marked filled or crossed out, not just
-the filled ones. A board whose filled squares are all correct but whose blanks are
-untouched is not solved.
+A puzzle is finished when its **filled** squares match the clues. A square left
+undecided counts as not filled, so a player who fills the right squares and marks
+nothing else has finished.
 
-This is the existing rule, not a new one, and it is recorded here because it is the first
-time anybody has met it: it took 372 taps to finish a 15 by 15 puzzle with 93 filled
-squares, because the other 132 had to be crossed out one at a time. **It is a question
-for the owner of this project, not a decision taken here.** Most nonogram implementations
-treat a board as finished when the filled squares match, and leave crossing out as an
-optional aid to the player. See `/mnt/project-files/decisions/decisions-waiting-on-you.md`.
+This was decided by the project owner on 2026-10-23, in answer to a question this page
+raised. `Nonogram::is_solved` previously required every square to be decided one way or
+the other, which meant finishing a 15 by 15 puzzle with 93 filled squares took **372
+taps**, because the other 132 had to be crossed out one at a time. It is now 93. Most
+nonogram implementations work this way: crossing out is a note the player keeps for
+themselves, and it says nothing that the absence of a filled square does not already say.
+
+Three things the loosening does **not** change, each with a test:
+
+* A board with **extra** filled squares is still unfinished, because the runs will not
+  match. "Only the filled squares count" is not "only the filled squares the answer has".
+* A blank board still fails any puzzle with a clue in it.
+* **A stored answer must still decide every square.** `publish::replay_of` requires it,
+  separately from `is_solved`, and the two now disagree on purpose: a player has finished
+  when the filled squares are right, but a *witness* is a record of what a solver found
+  and is kept as a whole board. A half-marked witness would hash to a different value, so
+  the store's copy would no longer be the answer anybody checked. `replay_of` was made
+  public for this: `report_for` works out its own witness by solving, so there was no way
+  to hand it a half-marked one, and a claim with no way to check it is the kind this
+  project does not make.
 
 ### The page checks the signature with its own key
 
@@ -88,6 +102,10 @@ the page's only assumption is that bytes arrive.
 
 | Claim | What holds it |
 | --- | --- |
+| Filling only the right squares finishes the puzzle | `gs-web/tests/playing.rs::a_board_with_only_its_filled_squares_marked_is_solved`, `gs-nonogram/tests/pipeline.rs::crossing_out_the_blanks_is_optional` |
+| Taking the crosses off a finished board leaves it finished | `playing.rs::clearing_a_crossed_out_square_leaves_the_puzzle_solved`, and `drive-page.mjs` in the page |
+| Missing one **filled** square is still unfinished | `playing.rs::a_board_one_filled_square_short_is_not_solved` |
+| A stored answer must still decide every square | `pipeline.rs::a_witness_that_leaves_a_square_undecided_is_refused_even_though_it_is_solved`, with its anti-vacuity half |
 | A grid is drawn, with a clue for every row and column | `scripts/drive-page.mjs`, `details` |
 | Tapping fills, taps again to cross out, again to clear | `drive-page.mjs`, `afterTaps` |
 | An untapped square is left undecided | `drive-page.mjs`, `afterTaps.untouched` |
