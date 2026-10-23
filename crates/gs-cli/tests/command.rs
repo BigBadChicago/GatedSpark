@@ -736,3 +736,379 @@ fn slitherlink_goes_from_an_empty_folder_to_a_signed_verified_puzzle_too() {
         stdout(&ok)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The schedule and the published folder, which also need a real solver
+// ---------------------------------------------------------------------------
+
+/// A store with real puzzles in it, or `None` when there is no solver.
+///
+/// The schedule commands all need genuinely signed puzzles, because they open each one
+/// from the store rather than trusting a name. So there is no way to test them against
+/// made-up files, which is the correct trade: the thing being tested is that a day names
+/// a puzzle that really exists.
+fn a_store_with_puzzles(temp: &Temp, label: &str) -> Option<(String, String)> {
+    let program = match solver_program() {
+        Ok(program) => program,
+        Err(why) => {
+            println!(
+                "\n*** {label} WAS NOT CHECKED: {why}.\n\
+                 *** Unchecked: that a schedule is published, extends, refuses a day\n\
+                 *** twice, and that publishing leaves the answers behind.\n"
+            );
+            return None;
+        }
+    };
+    let key = a_key(temp);
+    let store = temp.text("store");
+    let fill = run(&[
+        "fill", "--store", &store, "--key", &key, "--count", "2", "--level", "gentle", "--solver",
+        &program,
+    ]);
+    assert!(fill.status.success(), "{}", stderr(&fill));
+    Some((store, key))
+}
+
+#[test]
+fn a_schedule_is_published_and_then_extends_rather_than_restarting() {
+    let temp = Temp::new("schedule");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "SCHEDULING") else {
+        return;
+    };
+
+    // Nothing yet. Not the same as a schedule with no days in it.
+    let none = run(&["schedule", "--store", &store, "--key", &key]);
+    assert!(none.status.success(), "{}", stderr(&none));
+    assert!(stdout(&none).contains("no schedule"), "{}", stdout(&none));
+
+    // The first schedule has to say where day zero is.
+    let no_start = run(&["schedule", "--store", &store, "--key", &key, "--days", "1"]);
+    assert!(!no_start.status.success());
+    assert!(
+        stderr(&no_start).contains("--start"),
+        "{}",
+        stderr(&no_start)
+    );
+
+    let first = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let printed = stdout(&first);
+    assert!(printed.contains("schedule number 1"), "{printed}");
+    assert!(printed.contains("counting from 2026-10-24"), "{printed}");
+
+    // Run it again: the second day is day one, not day zero again.
+    let second = run(&["schedule", "--store", &store, "--key", &key, "--days", "1"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    let printed = stdout(&second);
+    assert!(printed.contains("schedule number 2"), "{printed}");
+    assert!(
+        printed.contains("2 days, up to 2026-10-25"),
+        "the second run should extend the calendar, not restart it: {printed}"
+    );
+}
+
+/// Moving the start day would renumber every day already published, so it is fixed.
+#[test]
+fn the_start_day_cannot_be_moved_once_it_is_signed() {
+    let temp = Temp::new("startday");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "THE START DAY") else {
+        return;
+    };
+    let first = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let moved = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-11-01",
+    ]);
+    assert!(!moved.status.success(), "moving the start day was allowed");
+    assert!(stderr(&moved).contains("renumber"), "{}", stderr(&moved));
+}
+
+#[test]
+fn a_date_that_is_not_a_real_day_is_refused() {
+    let temp = Temp::new("baddate");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "DATE CHECKING") else {
+        return;
+    };
+    for bad in ["2026-02-30", "2026-13-01", "24th October", "2026-10"] {
+        let out = run(&[
+            "schedule", "--store", &store, "--key", &key, "--days", "1", "--start", bad,
+        ]);
+        assert!(!out.status.success(), "{bad} was accepted as a date");
+    }
+}
+
+/// A day with two puzzles for one game has no answer, so it is refused.
+#[test]
+fn one_day_cannot_have_two_puzzles_for_the_same_game() {
+    let temp = Temp::new("twoinaday");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "ONE PUZZLE A DAY") else {
+        return;
+    };
+    let names: Vec<String> = std::fs::read_dir(temp.join("store"))
+        .expect("the store exists")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().into_string().expect("text"))
+        .collect();
+    assert!(names.len() >= 2, "this test needs two puzzles");
+
+    let first = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--start",
+        "2026-10-24",
+        "--add",
+        &names[0],
+        "--on",
+        "2026-10-24",
+    ]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let clash = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--add",
+        &names[1],
+        "--on",
+        "2026-10-24",
+    ]);
+    assert!(!clash.status.success(), "two puzzles on one day were taken");
+    assert!(stderr(&clash).contains("already has"), "{}", stderr(&clash));
+}
+
+/// Asked for more days than there are puzzles, it says so and writes nothing.
+///
+/// The same rule `fill` follows. Quietly scheduling four days when seven were asked for
+/// is a Thursday with no puzzle, found by the players.
+#[test]
+fn asking_for_more_days_than_there_are_puzzles_says_so_and_writes_nothing() {
+    let temp = Temp::new("shortfall");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "THE SHORTFALL") else {
+        return;
+    };
+    let out = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "99",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(!out.status.success());
+    let said = stderr(&out);
+    assert!(said.contains("asked for 99 more days"), "{said}");
+    assert!(said.contains("Nothing has been written"), "{said}");
+    assert!(
+        !temp.join("store").join("schedule.gspk").exists(),
+        "a schedule was written after the command said it had not written one"
+    );
+}
+
+/// A schedule numbered at or below the one a device has is one it refuses.
+#[test]
+fn a_schedule_number_that_does_not_go_up_is_refused() {
+    let temp = Temp::new("serial");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "THE SCHEDULE NUMBER") else {
+        return;
+    };
+    let first = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let same = run(&[
+        "schedule", "--store", &store, "--key", &key, "--days", "1", "--serial", "1",
+    ]);
+    assert!(!same.status.success(), "the same number was accepted again");
+    assert!(stderr(&same).contains("not higher"), "{}", stderr(&same));
+}
+
+/// A withdrawn puzzle is one every device deletes, so scheduling it is scheduling
+/// an empty day.
+#[test]
+fn a_withdrawn_puzzle_is_never_scheduled() {
+    let temp = Temp::new("withdrawnday");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "WITHDRAWN PUZZLES") else {
+        return;
+    };
+    let names: Vec<String> = std::fs::read_dir(temp.join("store"))
+        .expect("the store exists")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().into_string().expect("text"))
+        .collect();
+
+    let gone = run(&[
+        "withdraw",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--add",
+        &names[0],
+        "--reason",
+        "no-answer",
+    ]);
+    assert!(gone.status.success(), "{}", stderr(&gone));
+
+    let named = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--start",
+        "2026-10-24",
+        "--add",
+        &names[0],
+        "--on",
+        "2026-10-24",
+    ]);
+    assert!(!named.status.success(), "a withdrawn puzzle was scheduled");
+    assert!(stderr(&named).contains("withdrawn"), "{}", stderr(&named));
+
+    // And it is skipped when days are handed out automatically, rather than being an
+    // error: the point of `--days` is that it needs no supervision.
+    let days = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(days.status.success(), "{}", stderr(&days));
+}
+
+/// The one thing publishing must never do.
+///
+/// A store keeps the filled-in grid beside each puzzle. Uploading that folder as it
+/// stands would publish every answer next to every puzzle, and nobody would notice until
+/// somebody looked.
+#[test]
+fn publishing_leaves_every_answer_behind() {
+    let temp = Temp::new("publish");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "PUBLISHING") else {
+        return;
+    };
+    let scheduled = run(&[
+        "schedule",
+        "--store",
+        &store,
+        "--key",
+        &key,
+        "--days",
+        "1",
+        "--start",
+        "2026-10-24",
+    ]);
+    assert!(scheduled.status.success(), "{}", stderr(&scheduled));
+
+    let site = temp.text("site");
+    let out = run(&["publish", "--store", &store, "--key", &key, "--out", &site]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // The store has answers in it; the published folder has none.
+    assert!(
+        count_named(&temp.join("store"), "witness.bin") > 0,
+        "the store should keep its answers"
+    );
+    assert_eq!(
+        count_named(&temp.join("site"), "witness.bin"),
+        0,
+        "an answer was published next to a puzzle"
+    );
+    assert!(
+        count_named(&temp.join("site"), "package.gspk") > 0,
+        "no puzzles were published at all"
+    );
+    assert!(
+        temp.join("site")
+            .join("store")
+            .join("schedule.gspk")
+            .is_file(),
+        "the schedule was not published, so a page would have nothing to open"
+    );
+}
+
+/// Publishing with nothing scheduled would be a folder a visitor cannot use.
+#[test]
+fn publishing_without_a_schedule_is_refused() {
+    let temp = Temp::new("nosched");
+    let Some((store, key)) = a_store_with_puzzles(&temp, "PUBLISHING WITH NO SCHEDULE") else {
+        return;
+    };
+    let site = temp.text("site");
+    let out = run(&["publish", "--store", &store, "--key", &key, "--out", &site]);
+    assert!(
+        !out.status.success(),
+        "a folder with no schedule was written"
+    );
+    assert!(stderr(&out).contains("no schedule"), "{}", stderr(&out));
+}
+
+/// How many files with this name are anywhere under a directory.
+fn count_named(root: &Path, name: &str) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut found = 0;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            found += count_named(&path, name);
+        } else if entry.file_name() == name {
+            found += 1;
+        }
+    }
+    found
+}

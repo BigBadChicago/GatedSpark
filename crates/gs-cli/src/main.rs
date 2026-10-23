@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use gs_core::package::{RecordedReplay, Signer};
+use gs_core::schedule::{seal_schedule, Date, OpenedSchedule, Schedule, Scheduled};
 use gs_core::withdrawal::{seal_list, OpenedList, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::difficulty::{propose_in_band, Band, BANDS};
@@ -91,6 +92,37 @@ gatedspark — make and keep verified puzzles
       Withdrawing does NOT delete the puzzle from the store. The list is what
       devices read; the puzzle stays where it is, so a mistaken withdrawal can be
       undone with --keep.
+
+  gatedspark schedule --store <dir> --key <file>
+                      [--start YYYY-MM-DD] [--days N] [--family NAME]
+                      [--add NAME --on YYYY-MM-DD] [--serial N]
+      Publish the signed schedule: which puzzle is each day's. With no --days and
+      no --add, it prints the current schedule and changes nothing.
+
+      --start DATE   the day the count begins from. Needed for the first
+                     schedule only, and fixed after that: moving it would
+                     renumber every day already published.
+      --days N       give each game N more days, taking puzzles the schedule does
+                     not already name. Run it again to extend further.
+      --family NAME  only this game, instead of every game in the store
+      --add NAME     schedule one named puzzle, with --on for the day
+      --on DATE      which day the --add puzzle is for
+      --serial N     the schedule's number, which must go up. Defaults to one
+                     more than the current schedule's.
+
+      A device works out today from its own clock and looks it up here. A wrong
+      clock shows the wrong day's puzzle; it cannot make a bad puzzle look good.
+
+  gatedspark publish  --store <dir> --key <file> --out <dir> [--page <dir>]
+      Write a folder an ordinary web host can serve: the signed packages, the
+      schedule, the withdrawal list, and optionally the page itself.
+
+      --out <dir>    where to write it
+      --page <dir>   also copy the page from here, usually crates/gs-web/www
+
+      The answers are deliberately NOT published. A store keeps the filled-in
+      grid beside each puzzle so nothing has to solve it twice; uploading that as
+      it stands would publish every answer. Only the signed package is copied.
 ";
 
 fn main() -> ExitCode {
@@ -116,6 +148,8 @@ fn run(args: &[String]) -> Result<(), String> {
         "show" => show(rest),
         "recheck" => recheck(rest),
         "withdraw" => withdraw(rest),
+        "schedule" => schedule(rest),
+        "publish" => publish_site(rest),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -824,4 +858,477 @@ fn hex(id: &[u8; 32]) -> String {
         out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is a hex digit"));
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// schedule
+// ---------------------------------------------------------------------------
+
+/// Parse a date the way a person writes one.
+fn date_from(text: &str) -> Result<Date, String> {
+    let parts: Vec<&str> = text.split('-').collect();
+    let bad = || {
+        format!(
+            "--{text} is not a date; write it as YYYY-MM-DD",
+            text = text
+        )
+    };
+    if parts.len() != 3 {
+        return Err(bad());
+    }
+    let year: u16 = parts[0].parse().map_err(|_| bad())?;
+    let month: u8 = parts[1].parse().map_err(|_| bad())?;
+    let day: u8 = parts[2].parse().map_err(|_| bad())?;
+    Date::new(year, month, day).ok_or_else(|| format!("{text} is not a real day"))
+}
+
+/// Publish the signed schedule: which puzzle is each day's.
+///
+/// The command that makes a daily puzzle a daily puzzle. Everything it refuses is a day
+/// that would otherwise break for every player at once, which is why there are four
+/// refusals rather than one.
+fn schedule(args: &[String]) -> Result<(), String> {
+    let args = Args::parse(args)?;
+    args.reject_unknown(&[
+        "store", "key", "start", "days", "family", "add", "on", "serial",
+    ])?;
+    let store = Store::open(args.required("store")?).map_err(|e| e.to_string())?;
+    let (signer, trusted) = key_and_trust(args.required("key")?)?;
+
+    let current = store
+        .schedule(&Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+    let held = current.as_ref().map_or(0, |opened| opened.schedule.serial);
+
+    let days: u32 = args.number("days", 0)?;
+    let adding = args.get("add");
+
+    if days == 0 && adding.is_none() {
+        print_schedule(current.as_ref(), &store);
+        return Ok(());
+    }
+
+    // The start day. Day numbers mean nothing without it, so it can only be chosen once:
+    // moving it later would silently renumber every day already published.
+    let start = match (current.as_ref(), args.get("start")) {
+        (Some(opened), None) => opened.schedule.start,
+        (Some(opened), Some(given)) => {
+            let given = date_from(given)?;
+            if given != opened.schedule.start {
+                return Err(format!(
+                    "--start {given} does not match the {} this schedule already counts \
+                     from. Changing the start day would renumber every day already \
+                     published, so it is fixed once the first schedule is signed.",
+                    opened.schedule.start
+                ));
+            }
+            given
+        }
+        (None, Some(given)) => date_from(given)?,
+        (None, None) => {
+            return Err(
+                "--start YYYY-MM-DD is needed for the first schedule: it is the \
+                        day the count begins from"
+                    .to_owned(),
+            )
+        }
+    };
+
+    let mut entries = current
+        .as_ref()
+        .map(|opened| opened.schedule.entries.clone())
+        .unwrap_or_default();
+
+    // Never schedule a withdrawn puzzle. A withdrawn puzzle is one a device deletes the
+    // moment it reads the list, so scheduling one is scheduling a day with nothing on it.
+    let withdrawals = store
+        .withdrawals(&Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+    let withdrawn = |id: &[u8; 32]| -> bool {
+        withdrawals.as_ref().is_some_and(|opened| {
+            opened
+                .list
+                .withdrawn
+                .iter()
+                .any(|entry| &entry.content_id == id)
+        })
+    };
+
+    if let Some(name) = adding {
+        let on = args
+            .required("on")
+            .map_err(|_| "--add also needs --on YYYY-MM-DD: which day it is for".to_owned())?;
+        let date = date_from(on)?;
+        let day = date.day_number_from(start).ok_or_else(|| {
+            format!(
+                "{date} is before this schedule's start day of {start}, so it has no day number"
+            )
+        })?;
+        let family = args.get("family").unwrap_or("nonogram").to_owned();
+        // Opened from the store rather than parsed from the name, the same rule
+        // `withdraw --add` follows: a name typed on a command line is a claim about a
+        // puzzle, not a digest of one. It also means a typo is an error here instead of
+        // a day that fetches nothing.
+        let stored = store
+            .get(name, &Sha256, &trusted)
+            .map_err(|e| format!("--add {name}: {e}"))?;
+        if stored.package.manifest.family != family {
+            return Err(format!(
+                "--add {name} is a {} puzzle but --family says {family}",
+                stored.package.manifest.family
+            ));
+        }
+        let id = *stored.package.content_id.as_bytes();
+        if withdrawn(&id) {
+            return Err(format!(
+                "--add {name}: that puzzle has been withdrawn, so no device would play it"
+            ));
+        }
+        if entries.iter().any(|e| e.day == day && e.family == family) {
+            return Err(format!(
+                "day {day} ({date}) already has a {family} puzzle. A day with two \
+                 puzzles has no answer, so this is refused rather than one of them \
+                 being picked."
+            ));
+        }
+        entries.push(Scheduled {
+            day,
+            family,
+            content_id: id,
+        });
+    }
+
+    if days > 0 {
+        extend_calendar(&store, &trusted, &mut entries, days, &withdrawn, &args)?;
+    }
+
+    // Sorted here, once, rather than relied on from the order things were pushed. The
+    // format requires it and `seal_schedule` refuses anything else.
+    entries.sort_by(|a, b| (a.day, &a.family).cmp(&(b.day, &b.family)));
+
+    let serial: u64 = args.number("serial", held + 1)?;
+    if serial <= held {
+        return Err(format!(
+            "--serial {serial} is not higher than the {held} already published. A \
+             schedule numbered at or below the one a device already has is one the \
+             device will refuse, which is how an old schedule is stopped from putting \
+             back a day that was replaced."
+        ));
+    }
+
+    let plan = Schedule {
+        serial,
+        start,
+        entries,
+    };
+    let bytes = seal_schedule(&plan, &Sha256, &signer).map_err(|e| e.to_string())?;
+    let written = store
+        .put_schedule(&bytes, &Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "wrote {} ({} bytes)",
+        store.schedule_path().display(),
+        bytes.len()
+    );
+    print_schedule(Some(&written), &store);
+    Ok(())
+}
+
+/// Give each game the next `days` days, out of puzzles not already scheduled.
+///
+/// This is the daily workflow: run it, and every game has another week of days without
+/// anybody choosing which puzzle goes where. Puzzles are taken in the store's own order,
+/// which is sorted by fingerprint, so the same store and the same request produce the
+/// same calendar.
+fn extend_calendar(
+    store: &Store,
+    trusted: &TrustedKeys,
+    entries: &mut Vec<Scheduled>,
+    days: u32,
+    withdrawn: &dyn Fn(&[u8; 32]) -> bool,
+    args: &Args,
+) -> Result<(), String> {
+    let names = store.list().map_err(|e| e.to_string())?;
+
+    // Everything in the store, by family, minus what is already scheduled and minus
+    // anything withdrawn.
+    let mut free: Vec<(String, [u8; 32])> = Vec::new();
+    for name in &names {
+        let stored = store
+            .get(name, &Sha256, trusted)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let id = *stored.package.content_id.as_bytes();
+        if withdrawn(&id) || entries.iter().any(|e| e.content_id == id) {
+            continue;
+        }
+        free.push((stored.package.manifest.family.clone(), id));
+    }
+
+    // Which games to schedule. Named, or every game the store holds, so that a store
+    // with two games gets two games' worth of days.
+    let wanted: Vec<String> = match args.get("family") {
+        Some(one) => vec![one.to_owned()],
+        None => {
+            let mut families: Vec<String> = Vec::new();
+            for (family, _) in &free {
+                if !families.contains(family) {
+                    families.push(family.clone());
+                }
+            }
+            for entry in entries.iter() {
+                if !families.contains(&entry.family) {
+                    families.push(entry.family.clone());
+                }
+            }
+            families.sort();
+            families
+        }
+    };
+    if wanted.is_empty() {
+        return Err("there are no puzzles in the store to schedule".to_owned());
+    }
+
+    for family in &wanted {
+        // Carry on from the last day this game already has, so running the command twice
+        // extends the calendar rather than fighting over the same days.
+        let next_day = entries
+            .iter()
+            .filter(|e| &e.family == family)
+            .map(|e| e.day)
+            .max()
+            .map_or(0, |last| last + 1);
+
+        let mut available: Vec<[u8; 32]> = free
+            .iter()
+            .filter(|(f, _)| f == family)
+            .map(|(_, id)| *id)
+            .collect();
+
+        if available.len() < days as usize {
+            // Says when it came up short, exactly as `fill` does. Silently scheduling
+            // four days when seven were asked for is a Thursday with no puzzle,
+            // discovered by the players.
+            return Err(format!(
+                "{family}: asked for {days} more days but only {} unscheduled puzzles \
+                 are in the store. Run `gatedspark fill` for more, then this again. \
+                 Nothing has been written.",
+                available.len()
+            ));
+        }
+        available.truncate(days as usize);
+        for (offset, id) in available.into_iter().enumerate() {
+            entries.push(Scheduled {
+                day: next_day + u32::try_from(offset).expect("a day count fits"),
+                family: family.clone(),
+                content_id: id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn print_schedule(current: Option<&OpenedSchedule>, store: &Store) {
+    let Some(opened) = current else {
+        println!("no schedule in {} yet", store.root().display());
+        return;
+    };
+    let plan = &opened.schedule;
+    println!(
+        "schedule number {}, signed by {}, counting from {}",
+        plan.serial, opened.key_id, plan.start
+    );
+    if plan.is_empty() {
+        println!("it names no days");
+        return;
+    }
+    for family in plan.families() {
+        let last = plan.last_day(family).unwrap_or(0);
+        println!(
+            "  {family}: {} days, up to {} ({})",
+            plan.entries.iter().filter(|e| e.family == family).count(),
+            plan.start.plus_days(last),
+            format_args!("day {last}")
+        );
+    }
+    println!();
+    println!("A device works out today's day number from its own clock and looks it up");
+    println!("here. A wrong clock shows the wrong day's puzzle; it cannot make a bad");
+    println!("puzzle look good, because what a puzzle is worth is still its own signature.");
+}
+
+// ---------------------------------------------------------------------------
+// publish
+// ---------------------------------------------------------------------------
+
+/// Write a folder that an ordinary web host can serve.
+///
+/// # Why there is no program on the server
+///
+/// Every check that matters already happens on the device: the page checks each
+/// package's signature itself against a key built into the page, and it checks the
+/// schedule and the withdrawal list the same way. A server that did nothing but hand
+/// over files would be a server to run, pay for, patch and have go down, in exchange
+/// for nothing. So this writes files.
+///
+/// # What it deliberately leaves out
+///
+/// **The answers.** A store keeps `witness.bin` beside each puzzle — the filled-in grid
+/// — so that nothing has to solve the puzzle again. Uploading that folder as it stands
+/// would publish every answer next to every puzzle. This command copies the signed
+/// package and nothing else, and a test holds it.
+///
+/// The page never needs an answer: it asks the game's own rules whether a board is
+/// finished, every time, which is the same reason the page is not allowed to work it out
+/// for itself.
+fn publish_site(args: &[String]) -> Result<(), String> {
+    let args = Args::parse(args)?;
+    args.reject_unknown(&["store", "key", "out", "page"])?;
+    let store = Store::open(args.required("store")?).map_err(|e| e.to_string())?;
+    let (_signer, trusted) = key_and_trust(args.required("key")?)?;
+    let out = PathBuf::from(args.required("out")?);
+
+    // The schedule is what makes the folder a daily puzzle rather than a heap of files.
+    // Without one, a visitor's page has nothing to ask for.
+    let schedule = store
+        .schedule(&Sha256, &trusted)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "there is no schedule in this store yet, so a visitor's page would have \
+             nothing to open. Run `gatedspark schedule --days 7` first."
+                .to_owned()
+        })?;
+
+    let withdrawals = store
+        .withdrawals(&Sha256, &trusted)
+        .map_err(|e| e.to_string())?;
+
+    // Every puzzle the schedule names must be in the store. A day naming a puzzle
+    // nobody can fetch is a day that breaks for every player at once, and it is far
+    // better to find that here than from a player.
+    let names = store.list().map_err(|e| e.to_string())?;
+    let mut in_store: Vec<(String, [u8; 32])> = Vec::new();
+    for name in &names {
+        let stored = store
+            .get(name, &Sha256, &trusted)
+            .map_err(|e| format!("{name}: {e}"))?;
+        in_store.push((name.clone(), *stored.package.content_id.as_bytes()));
+    }
+
+    let mut missing = Vec::new();
+    for entry in &schedule.schedule.entries {
+        if !in_store.iter().any(|(_, id)| id == &entry.content_id) {
+            missing.push(format!(
+                "day {} ({}) of {}: {}",
+                entry.day,
+                schedule.schedule.start.plus_days(entry.day),
+                entry.family,
+                hex(&entry.content_id)
+            ));
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "the schedule names {} puzzle(s) that are not in this store, so those days \
+             would break for everybody:\n  {}\nNothing has been written.",
+            missing.len(),
+            missing.join("\n  ")
+        ));
+    }
+
+    let puzzles = out.join("store");
+    io_err(format!("making {}", puzzles.display()), || {
+        std::fs::create_dir_all(&puzzles)
+    })?;
+
+    // Only the signed package. Never the answer beside it; see this function's header.
+    let mut copied = 0usize;
+    for (name, _) in &in_store {
+        let directory = puzzles.join(name);
+        io_err(format!("making {}", directory.display()), || {
+            std::fs::create_dir_all(&directory)
+        })?;
+        // A puzzle's directory is named by its own fingerprint, which is what `list`
+        // returns, so no lookup is needed to find it.
+        let from = store.root().join(name).join(gs_store::PACKAGE_FILE);
+        let to = directory.join(gs_store::PACKAGE_FILE);
+        io_err(format!("copying {}", to.display()), || {
+            std::fs::copy(&from, &to).map(|_| ())
+        })?;
+        copied += 1;
+    }
+
+    let schedule_to = puzzles.join(gs_store::SCHEDULE_FILE);
+    io_err(format!("copying {}", schedule_to.display()), || {
+        std::fs::copy(store.schedule_path(), &schedule_to).map(|_| ())
+    })?;
+
+    if withdrawals.is_some() {
+        let to = puzzles.join(gs_store::WITHDRAWALS_FILE);
+        io_err(format!("copying {}", to.display()), || {
+            std::fs::copy(store.withdrawals_path(), &to).map(|_| ())
+        })?;
+    }
+
+    // The page itself, when asked for. Optional because the compiled core is built by
+    // `scripts/build-web.sh` and this command does not run a compiler.
+    let mut page_files = 0usize;
+    if let Some(page) = args.get("page") {
+        page_files = copy_tree(&PathBuf::from(page), &out)?;
+    }
+
+    println!("wrote {}", out.display());
+    println!("  {copied} puzzle(s), signed packages only — no answers");
+    println!(
+        "  the schedule: {} days from {}",
+        schedule.schedule.len(),
+        schedule.schedule.start
+    );
+    match &withdrawals {
+        Some(opened) => println!(
+            "  the withdrawal list: number {}, naming {}",
+            opened.list.serial,
+            opened.list.len()
+        ),
+        None => println!("  no withdrawal list (none has been published)"),
+    }
+    if page_files > 0 {
+        println!("  {page_files} page file(s)");
+    } else {
+        println!("  no page: pass --page crates/gs-web/www to include it");
+    }
+    println!();
+    println!("Upload that folder to any web host. Nothing in it needs a program to serve");
+    println!("it, because every check happens on the device that opens it.");
+    Ok(())
+}
+
+/// Copy a directory and everything under it, returning how many files were written.
+fn copy_tree(from: &PathBuf, to: &PathBuf) -> Result<usize, String> {
+    io_err(format!("making {}", to.display()), || {
+        std::fs::create_dir_all(to)
+    })?;
+    let mut written = 0usize;
+    let entries =
+        std::fs::read_dir(from).map_err(|cause| format!("reading {}: {cause}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|cause| format!("reading {}: {cause}", from.display()))?;
+        let kind = entry
+            .file_type()
+            .map_err(|cause| format!("reading {}: {cause}", entry.path().display()))?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            written += copy_tree(&entry.path(), &target)?;
+        } else {
+            io_err(format!("copying {}", target.display()), || {
+                std::fs::copy(entry.path(), &target).map(|_| ())
+            })?;
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
+fn io_err(doing: String, mut act: impl FnMut() -> std::io::Result<()>) -> Result<(), String> {
+    act().map_err(|cause| format!("{doing}: {cause}"))
 }
