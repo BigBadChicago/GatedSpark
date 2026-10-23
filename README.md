@@ -122,8 +122,13 @@ on the web now and on a desktop later without being rewritten. It loads a puzzle
 `gatedspark fill` wrote, **checks the signature itself** against a key the page ships with, and
 refuses everything else. The compressed download is 57 KB.
 
-Nothing is playable yet. This piece deliberately stops at the point the trust chain reaches the
-browser, because that is the part that could have turned out to be impossible.
+A puzzle is also playable: marking squares, undo and redo, and knowing when it is solved. What is
+still missing is the page itself — the drawing and the tapping — and the offline buffer.
+
+The rule that keeps playing honest is that **nothing in the browser decides whether a board is
+finished.** It asks `Nonogram::is_solved`, which checks the clues rather than a remembered answer,
+and it asks every single time with no cached flag. A page that worked it out for itself would be a
+second answer to that question, and the one the player saw would eventually be the wrong one.
 
 The thing worth knowing about it came from a measurement taken before any of it was designed:
 **every crate in this workspace compiles for a browser, including the two that must never be in

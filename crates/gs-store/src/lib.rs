@@ -40,12 +40,38 @@
 //! someone replacing it, and a tampered answer would make a future re-check produce the
 //! wrong result while every signature still passed.
 //!
-//! It closes itself. The validation report already records the **state hash of the
-//! witness**, as `Replay::Reproduced(hash)`, and that field is inside the package, so it
-//! is covered by the signature. [`StateHash::of`] is defined as `of_bytes` over
+//! It mostly closes itself. The validation report already records the **state hash of
+//! the witness**, as `Replay::Reproduced(hash)`, and that field is inside the package, so
+//! it is covered by the signature. [`StateHash::of`] is defined as `of_bytes` over
 //! [`State::canonical_bytes`](gs_core::state::State::canonical_bytes) — exactly the
 //! bytes stored here — so a stored witness can be checked against a number that was
 //! signed at the moment the puzzle was published. No new format and no second digest.
+//!
+//! # What that check does and does not cover
+//!
+//! Stated precisely, because the first version of this paragraph claimed more than the
+//! check delivers.
+//!
+//! `StateHash` is FNV-1a over 64 bits, and `gs_core::hash` is explicit that the strength
+//! needed of it is "none; an accidental collision is what is being guarded against". It
+//! is a replay-divergence check, not a cryptographic one. So:
+//!
+//! - **Covered:** an answer file that was corrupted, truncated, half-written, or edited
+//!   by someone not trying to defeat the check. A change made without aiming at the hash
+//!   is caught with overwhelming probability, and the failure names both numbers.
+//! - **Not covered:** someone who can write into this store *and* wants to substitute a
+//!   different answer. Finding a second byte string with the same 64-bit FNV hash is
+//!   cheap, so a determined writer can pass this check.
+//!
+//! What bounds the damage is that the package itself is signed. The puzzle, its clues,
+//! its report and the questions the solver answered cannot be changed at all. Only the
+//! cached answer can, and an answer is recomputable from the clues — the store keeps it
+//! so a puzzle need not be re-solved, not because it is the only copy.
+//!
+//! Making this adversarial would mean recording the witness under a cryptographic digest
+//! as well, which changes `Manifest` and so changes what every existing signature
+//! covers. That is a decision rather than a tidy-up, and it is recorded in ADR 0008 and
+//! ADR 0003's not-enforced list rather than taken quietly here.
 //!
 //! # Nothing enters this store unverified
 //!

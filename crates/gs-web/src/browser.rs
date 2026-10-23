@@ -18,6 +18,7 @@ use wasm_bindgen::prelude::*;
 
 use gs_crypto::{Sha256, TrustedKeys};
 
+use crate::play::{Mark, Session};
 use crate::{load, Playable};
 
 /// The page, holding the keys it will accept puzzles from.
@@ -142,6 +143,197 @@ impl Puzzle {
     #[must_use]
     pub fn column_clue(&self, index: usize) -> Vec<u16> {
         self.playable
+            .column_clues()
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// What one square holds, in the shape a web page can switch on.
+///
+/// A separate type from [`crate::play::Mark`] on purpose: `Mark` lives in a module that
+/// compiles for an ordinary machine too, and `#[wasm_bindgen]` cannot go there. This is
+/// the translation, and the two conversions below are the only place the mapping exists.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Square {
+    /// Part of the picture.
+    Filled = 0,
+    /// Definitely not part of the picture.
+    Empty = 1,
+    /// Not decided yet.
+    Unknown = 2,
+}
+
+impl From<Square> for Mark {
+    fn from(square: Square) -> Mark {
+        match square {
+            Square::Filled => Mark::Filled,
+            Square::Empty => Mark::Empty,
+            Square::Unknown => Mark::Unknown,
+        }
+    }
+}
+
+impl From<Mark> for Square {
+    fn from(mark: Mark) -> Square {
+        match mark {
+            Mark::Filled => Square::Filled,
+            Mark::Empty => Square::Empty,
+            Mark::Unknown => Square::Unknown,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl Puzzle {
+    /// Start playing.
+    ///
+    /// Consumes the puzzle, so a page cannot hold a puzzle and a game of it at once and
+    /// wonder which is current. There is one game of one puzzle.
+    #[must_use]
+    pub fn play(self) -> Game {
+        Game {
+            session: Session::start(self.playable),
+        }
+    }
+}
+
+/// One person playing one puzzle.
+///
+/// Every method here passes straight through to [`Session`], which passes straight
+/// through to the rules. Nothing in this type decides anything — above all not whether
+/// the board is finished, which is the one question a page must never answer for itself.
+#[wasm_bindgen]
+pub struct Game {
+    session: Session,
+}
+
+#[wasm_bindgen]
+impl Game {
+    /// Mark one square, by row and column.
+    ///
+    /// Returns `true` if the board changed. A tap that changes nothing — a square
+    /// already marked that way, or one off the edge of the board — is `false` rather
+    /// than an error, because those are ordinary during play and a page should not have
+    /// to catch an exception to find out somebody tapped twice.
+    pub fn mark(&mut self, row: u16, column: u16, square: Square) -> bool {
+        self.session.mark_at(row, column, square.into()).is_ok()
+    }
+
+    /// Why the last `mark` did nothing, or an empty string if it did something.
+    ///
+    /// Separate from `mark` so the common path stays a plain yes or no. A page showing
+    /// a message needs this; a page just drawing a board does not.
+    pub fn mark_and_say(&mut self, row: u16, column: u16, square: Square) -> String {
+        match self.session.mark_at(row, column, square.into()) {
+            Ok(()) => String::new(),
+            Err(why) => why.to_string(),
+        }
+    }
+
+    /// Take back the last move. `false` if there was nothing to take back.
+    pub fn undo(&mut self) -> bool {
+        self.session.undo().is_ok()
+    }
+
+    /// Put back a move that was taken back. `false` if there was none.
+    pub fn redo(&mut self) -> bool {
+        self.session.redo().is_ok()
+    }
+
+    /// What one square holds. A square off the board reads as `Unknown`, because a page
+    /// draws a board in a loop and a thrown error there is a blank page.
+    #[must_use]
+    pub fn square(&self, row: u16, column: u16) -> Square {
+        self.session.mark_at_of(row, column).into()
+    }
+
+    /// The whole board in one call, row by row from the top left.
+    ///
+    /// Each byte is a [`Square`] value. This is for drawing: asking square by square
+    /// across the boundary is one call per square, and a 20 by 20 board redrawn on every
+    /// tap is 400 of them. It is derived fresh from the same board each time, so it
+    /// cannot drift from what `square` would say.
+    #[must_use]
+    pub fn board(&self) -> Vec<u8> {
+        let dims = self.session.puzzle().clues.dims;
+        (0..dims.height)
+            .flat_map(|row| {
+                (0..dims.width).map(move |column| {
+                    // `as` on a fieldless enum is its discriminant, which is the value
+                    // the page reads. The numbers live on `Square` and nowhere else.
+                    Square::from(self.session.mark_at_of(row, column)) as u8
+                })
+            })
+            .collect()
+    }
+
+    /// Whether the puzzle is solved.
+    ///
+    /// Asked of the rules every time it is called. No cached answer, and nothing in this
+    /// file works it out.
+    #[must_use]
+    pub fn is_solved(&self) -> bool {
+        self.session.is_solved()
+    }
+
+    #[must_use]
+    pub fn moves_made(&self) -> u32 {
+        self.session.moves_made()
+    }
+
+    /// The fingerprint of the board as it stands: the same kind of number a published
+    /// report binds a stored answer to.
+    #[must_use]
+    pub fn board_fingerprint(&self) -> String {
+        self.session.board_fingerprint().to_hex()
+    }
+
+    // The puzzle's own details, so a page can show "signed by, level, one answer only"
+    // while somebody plays. Reading them from the session rather than keeping a second
+    // copy, for the usual reason.
+
+    #[must_use]
+    pub fn width(&self) -> u16 {
+        self.session.puzzle().dims().width
+    }
+
+    #[must_use]
+    pub fn height(&self) -> u16 {
+        self.session.puzzle().dims().height
+    }
+
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        self.session.puzzle().content_id.to_hex()
+    }
+
+    #[must_use]
+    pub fn signed_by(&self) -> String {
+        self.session.puzzle().signed_by.clone()
+    }
+
+    #[must_use]
+    pub fn band(&self) -> String {
+        self.session.puzzle().band.clone().unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn row_clue(&self, index: usize) -> Vec<u16> {
+        self.session
+            .puzzle()
+            .row_clues()
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn column_clue(&self, index: usize) -> Vec<u16> {
+        self.session
+            .puzzle()
             .column_clues()
             .get(index)
             .cloned()

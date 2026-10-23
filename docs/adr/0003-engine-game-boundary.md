@@ -205,7 +205,7 @@ there are players. The thresholds are provisional and the module says so.
 | CI's one outside-the-building job checks the runner that ships, not a copy of it | structural: `solver_agreement.rs` drives `gs_solver::ExternalSolver`; see ADR 0007 |
 | Nothing reaches the store that the store cannot verify itself | `store::a_package_the_store_cannot_verify_never_reaches_the_disk`, `..._a_package_signed_by_an_untrusted_key_is_refused` |
 | A stored puzzle is named by its own fingerprint, and the name is checked against it | structural: `Store::put` is not given an id and `ContentId` has no constructor from bytes; `store::the_directory_is_named_by_the_content_id_and_holds_the_two_files`, `..._a_renamed_directory_is_a_refusal_rather_than_a_different_puzzle` |
-| A stored answer that disagrees with the signed report is caught | `store::an_answer_that_does_not_match_the_signed_report_is_refused`, `..._an_answer_swapped_on_disk_after_the_fact_is_caught_on_the_way_out` |
+| A stored answer that disagrees with the signed report is caught, against damage rather than against an adversary | `store::an_answer_that_does_not_match_the_signed_report_is_refused`, `..._an_answer_corrupted_on_disk_after_the_fact_is_caught_on_the_way_out` |
 | A puzzle whose answer was never replayed is not kept | `store::a_package_with_no_replayed_answer_is_refused` |
 | A half-written puzzle is never served, listed or counted | `store::a_half_written_puzzle_is_not_a_puzzle` |
 | A re-check of an empty store reports that it verified nothing | `command::recheck_on_an_empty_store_says_it_verified_nothing` |
@@ -254,6 +254,14 @@ Explicitly **not yet enforced**, and labelled as such in the code:
   uninstall them. That the GNU target never calls `link.exe` follows from the target triple.
   The one real observation behind this is the failure on the project's own Windows machine on
   2026-10-22, which is evidence rather than a test.
+- **A stored answer against somebody who can write to the store.** `gs-store` checks `witness.bin`
+  against the `StateHash` in the signed report, and `gs_core::hash` is explicit that the strength
+  needed of a `StateHash` is "none; an accidental collision is what is being guarded against". It
+  is 64-bit FNV-1a, so it catches corruption and a careless edit, and does not stop a writer
+  willing to craft a colliding answer. The package itself is signed, so only the cached answer is
+  reachable, and an answer is recomputable from the clues. Making it adversarial means recording
+  the witness under a cryptographic digest too, which changes `Manifest` and therefore changes what
+  every existing signature covers — a decision, not a tidy-up. See ADR 0008.
 - **Periodic state checkpoints.** The architecture plan lists them in the authoritative record.
   They are a storage and seek optimisation belonging to the save format in M4; `Timeline::goto`
   walks the tree in the meantime, and is the reference the checkpointed version will be tested

@@ -74,7 +74,28 @@ stored answer hashes to ff7f8ddbbcad7f50, signed report says fcaabdcb4d4ee585
 
 One changed byte in the answer file is caught, and the failure names both numbers. This works only
 because `StateHash::of(state)` and `StateHash::of_bytes(state.canonical_bytes())` agree, which has
-its own test. A package whose replay is anything other than `Reproduced` is refused on the way in
+its own test.
+
+**Amended 2026-10-23, correcting this ADR.** The paragraph above originally described this as
+closing the tampering problem. It does not, and the overstatement was mine. `StateHash` is FNV-1a
+over 64 bits, and `gs_core::hash` says plainly that the strength needed of it is "none; an
+accidental collision is what is being guarded against" — it is a replay-divergence check, not a
+cryptographic one.
+
+So what the check covers is corruption, truncation, a half-written file and a careless edit: any
+change not aimed at the hash is caught with overwhelming probability. What it does not cover is
+somebody who can write into the store and wants to substitute a different answer, because finding a
+second byte string with the same 64-bit FNV hash is cheap.
+
+Two things bound that. The package itself is signed, so the puzzle, its clues, its report and the
+solver's answers cannot be altered at all — only the cached answer can. And an answer is
+recomputable from the clues; the store keeps it so a puzzle need not be re-solved, not because it is
+the only copy.
+
+Making it adversarial means recording the witness under a cryptographic digest as well, which means
+adding a field to `Manifest` and therefore changing what every existing signature covers. That is a
+decision for the project rather than a tidy-up, so it is recorded here and in ADR 0003's
+not-enforced list and left open. A package whose replay is anything other than `Reproduced` is refused on the way in
 with `NoReproducedWitness`: an answer nobody replayed is not an answer worth keeping.
 
 ### Writes are staged and renamed
@@ -163,7 +184,7 @@ must not become a store in the current directory.
 | An answer that does not match the signed report is refused on the way in | `an_answer_that_does_not_match_the_signed_report_is_refused` |
 | A package with no replayed answer is refused | `a_package_with_no_replayed_answer_is_refused` |
 | One flipped byte in a stored answer fails `recheck`, naming both hashes | `an_empty_folder_becomes_signed_verified_puzzles_and_then_rechecks` |
-| An answer swapped on disk after the fact is caught on the way out | `an_answer_swapped_on_disk_after_the_fact_is_caught_on_the_way_out` |
+| An answer corrupted on disk after the fact is caught on the way out | `an_answer_corrupted_on_disk_after_the_fact_is_caught_on_the_way_out` |
 | A truncated package is caught rather than served | `a_truncated_package_on_disk_is_caught_rather_than_served` |
 | A name that is not a fingerprint is refused without touching the disk | `a_name_that_is_not_a_content_id_is_refused_without_touching_the_disk` |
 | A half-written puzzle is not listed or counted | `a_half_written_puzzle_is_not_a_puzzle` |
