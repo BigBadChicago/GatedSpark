@@ -265,6 +265,34 @@ impl Geometry {
         out
     }
 
+    /// The cells an edge borders: two in the middle of the board, one at the rim.
+    ///
+    /// The other direction of [`Geometry::edges_of_cell`], and the lookup a
+    /// worklist-driven solver needs: when an edge is decided, these are the clues
+    /// whose arithmetic may have changed.
+    #[must_use]
+    pub fn cells_of(self, edge: EdgeId) -> Vec<CellId> {
+        let Some((along, x, y)) = self.edge_at(edge) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(2);
+        match along {
+            Along::Across => {
+                if y > 0 {
+                    out.extend(self.cell(x, y - 1));
+                }
+                out.extend(self.cell(x, y));
+            }
+            Along::Down => {
+                if x > 0 {
+                    out.extend(self.cell(x - 1, y));
+                }
+                out.extend(self.cell(x, y));
+            }
+        }
+        out
+    }
+
     /// The two dots an edge joins, in order.
     #[must_use]
     pub fn ends_of(self, edge: EdgeId) -> Option<(DotId, DotId)> {

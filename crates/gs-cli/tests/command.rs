@@ -255,6 +255,70 @@ fn a_level_that_does_not_exist_lists_the_ones_that_do() {
 }
 
 #[test]
+fn a_game_that_does_not_exist_lists_the_ones_that_do() {
+    let temp = Temp::new("game");
+    let key = a_key(&temp);
+    let out = run(&[
+        "fill",
+        "--store",
+        &temp.text("store"),
+        "--key",
+        &key,
+        "--family",
+        "sudoku",
+    ]);
+    assert!(!out.status.success());
+    let message = stderr(&out);
+    assert!(message.contains("no such game: sudoku"), "{message}");
+    assert!(message.contains("nonogram"), "{message}");
+    assert!(message.contains("slitherlink"), "{message}");
+}
+
+#[test]
+fn a_flag_that_belongs_to_the_other_game_is_refused_rather_than_ignored() {
+    // Both halves matter. A flag silently ignored is worse than a flag refused: the
+    // run would finish, look like it worked, and have made something other than what
+    // was asked for.
+    let temp = Temp::new("crossedflags");
+    let key = a_key(&temp);
+
+    let level = run(&[
+        "fill",
+        "--store",
+        &temp.text("store"),
+        "--key",
+        &key,
+        "--family",
+        "slitherlink",
+        "--level",
+        "gentle",
+    ]);
+    assert!(!level.status.success());
+    let message = stderr(&level);
+    assert!(message.contains("--level is for nonogram"), "{message}");
+    assert!(
+        message.contains("no difficulty levels yet"),
+        "the refusal should say why, not just no: {message}"
+    );
+
+    let size = run(&[
+        "fill",
+        "--store",
+        &temp.text("store"),
+        "--key",
+        &key,
+        "--size",
+        "7",
+    ]);
+    assert!(!size.status.success());
+    assert!(
+        stderr(&size).contains("--size is for slitherlink"),
+        "{}",
+        stderr(&size)
+    );
+}
+
+#[test]
 fn a_time_limit_of_zero_is_refused() {
     // A zero time limit would mean every query is out of time before it starts, so
     // every puzzle would be refused for an undecided query. Refusing the flag says why.
@@ -574,5 +638,85 @@ fn the_repository_ignores_key_files() {
     assert!(
         text.lines().any(|line| line.trim() == "*.key"),
         ".gitignore must ignore *.key, got:\n{text}"
+    );
+}
+
+#[test]
+fn slitherlink_goes_from_an_empty_folder_to_a_signed_verified_puzzle_too() {
+    // The same exit test as the Nonogram one above, for the second game. The point is
+    // not that Slitherlink works — its own crate checks that — but that the one
+    // command, the one store and the one re-check are not built around one game.
+    let program = match solver_program() {
+        Ok(program) => program,
+        Err(why) => {
+            println!(
+                "\n*** SLITHERLINK'S WHOLE LOOP WAS NOT VERIFIED: {why}.\n\
+                 *** Unchecked: that `fill --family slitherlink` stores a signed,\n\
+                 *** solver-verified puzzle that survives a re-check.\n"
+            );
+            return;
+        }
+    };
+
+    let temp = Temp::new("slitherloop");
+    let key = a_key(&temp);
+    let store_path = temp.text("store");
+
+    // The smallest board this game makes, because this test is about the plumbing and
+    // a bigger board would only cost time. The cost of real boards is measured in
+    // `gs-slitherlink`, not here.
+    let fill = run(&[
+        "fill",
+        "--store",
+        &store_path,
+        "--key",
+        &key,
+        "--family",
+        "slitherlink",
+        "--count",
+        "1",
+        "--size",
+        "4",
+        "--solver",
+        &program,
+    ]);
+    assert!(fill.status.success(), "{}", stderr(&fill));
+    let printed = stdout(&fill);
+    assert!(printed.contains("game:   slitherlink"), "{printed}");
+    assert!(printed.contains("stored 1,"), "{printed}");
+    assert!(
+        printed.contains("undecided 0"),
+        "nothing undecided may be published: {printed}"
+    );
+
+    let dirs: Vec<_> = std::fs::read_dir(temp.join("store"))
+        .expect("the store exists now")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(dirs.len(), 1, "one puzzle was asked for");
+    let name = dirs[0].file_name().into_string().expect("text");
+
+    let shown = run(&["show", "--store", &store_path, "--key", &key, &name]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("slitherlink"), "{text}");
+    assert!(
+        text.contains("level        (none given)"),
+        "this game has no difficulty levels yet, and the report should say so: {text}"
+    );
+    assert!(text.contains("solver was asked:"), "{text}");
+    assert!(
+        text.contains("the real game accepted the solver's answer"),
+        "{text}"
+    );
+    assert!(!text.contains("not what was required"), "{text}");
+
+    let ok = run(&["recheck", "--store", &store_path, "--key", &key]);
+    assert!(ok.status.success(), "{}", stderr(&ok));
+    assert!(
+        stdout(&ok).contains("every fingerprint, signature and stored answer checks out"),
+        "{}",
+        stdout(&ok)
     );
 }

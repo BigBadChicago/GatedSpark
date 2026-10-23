@@ -31,6 +31,15 @@
 
 pub mod board;
 pub mod clues;
+pub mod generate;
 pub mod loops;
+/// The workspace's deterministic generator, which lives in the core.
+///
+/// Re-exported under this path for the reason `gs_nonogram` does: generation reaches
+/// for `rng::Rng`, and the seeds recorded in a validation report have to mean the
+/// same thing in both families.
+pub use gs_core::rng;
+pub mod publish;
 pub mod rules;
 pub mod smtlib;
+pub mod solve;

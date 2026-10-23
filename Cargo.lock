@@ -195,6 +195,7 @@ dependencies = [
  "gs-core",
  "gs-crypto",
  "gs-nonogram",
+ "gs-slitherlink",
  "gs-solver",
  "gs-store",
 ]

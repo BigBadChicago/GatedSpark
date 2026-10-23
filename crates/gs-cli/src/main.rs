@@ -39,6 +39,9 @@ use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::difficulty::{propose_in_band, Band, BANDS};
 use gs_nonogram::publish::{publish, PublishError};
 use gs_nonogram::solve::{solve, Budget};
+use gs_slitherlink::generate::{propose, Shape, REMOVAL_BUDGET};
+use gs_slitherlink::publish as sl_publish;
+use gs_slitherlink::solve as sl_solve;
 use gs_solver::{ExternalSolver, TimeLimit};
 use gs_store::{Store, Stored};
 
@@ -48,10 +51,22 @@ gatedspark — make and keep verified puzzles
   gatedspark keygen  --out <file>
       Make a development signing key. Refuses to write inside a Git repository.
 
-  gatedspark fill    --store <dir> --key <file> [--count N] [--level NAME]
+  gatedspark fill    --store <dir> --key <file> [--family NAME] [--count N]
+                     [--level NAME] [--size N] [--enclosed N]
                      [--solver PATH] [--from-seed N] [--max-seeds N] [--timeout SECS]
       Generate puzzles, ask a real solver about each one, and store the ones it
       vouches for. Nothing is signed that the solver did not vouch for.
+
+      --family NAME  which game: nonogram (the default) or slitherlink
+
+      Nonogram only:
+      --level NAME   one difficulty level, instead of all of them
+
+      Slitherlink only:
+      --size N       board size, N by N cells. Defaults to 7.
+      --enclosed N   how much of the board the loop should go round, in tenths of
+                     a percent. Defaults to 400. This game has no difficulty
+                     levels yet, on purpose: they wait for measured play data.
 
   gatedspark show    --store <dir> <puzzle name>
       Print one puzzle's validation report, read out of its signed package.
@@ -242,8 +257,11 @@ fn fill(args: &[String]) -> Result<(), String> {
     args.reject_unknown(&[
         "store",
         "key",
+        "family",
         "count",
         "level",
+        "size",
+        "enclosed",
         "solver",
         "from-seed",
         "max-seeds",
@@ -256,7 +274,34 @@ fn fill(args: &[String]) -> Result<(), String> {
     let from_seed: u64 = args.number("from-seed", 1)?;
     let max_seeds: u64 = args.number("max-seeds", 20_000)?;
     let seconds: u32 = args.number("timeout", 60)?;
-    let bands = chosen_bands(args.get("level"))?;
+    let family = args.get("family").unwrap_or("nonogram");
+    // Checked before anything slow starts. A flag that belongs to the other game is a
+    // mistake about what is being made, not a detail to ignore: `--level easy` on a
+    // Slitherlink run would otherwise quietly make puzzles of no particular
+    // difficulty, which is exactly what the flag was asking not to happen.
+    match family {
+        "nonogram" => {
+            for flag in ["size", "enclosed"] {
+                if args.get(flag).is_some() {
+                    return Err(format!("--{flag} is for slitherlink, not nonogram"));
+                }
+            }
+        }
+        "slitherlink" => {
+            if args.get("level").is_some() {
+                return Err(
+                    "--level is for nonogram. Slitherlink has no difficulty levels yet, \
+                     on purpose: they wait for measured play data rather than a guess."
+                        .to_owned(),
+                );
+            }
+        }
+        other => {
+            return Err(format!(
+                "no such game: {other}\ngames: nonogram, slitherlink"
+            ))
+        }
+    }
 
     let program = args.get("solver").unwrap_or("z3");
     let limit = TimeLimit::seconds(seconds)
@@ -272,9 +317,28 @@ fn fill(args: &[String]) -> Result<(), String> {
              without a solver, and nothing here will pretend otherwise."
         ));
     }
+    println!("game:   {family}");
     println!("solver: {program}, {seconds}s limit per query");
     println!("store:  {}", store.root().display());
 
+    if family == "slitherlink" {
+        let shape = Shape {
+            width: args.number("size", 7u16)?,
+            height: args.number("size", 7u16)?,
+            enclosed_per_mille: args.number("enclosed", 400u32)?,
+        };
+        return fill_slitherlink(
+            &store,
+            &signer,
+            &trusted,
+            &solver,
+            shape,
+            wanted,
+            from_seed..from_seed.saturating_add(max_seeds),
+        );
+    }
+
+    let bands = chosen_bands(args.get("level"))?;
     let mut stored = 0usize;
     let mut refused = 0usize;
     let mut undecided = 0usize;
@@ -340,6 +404,118 @@ fn fill(args: &[String]) -> Result<(), String> {
 
     println!();
     println!("stored {stored}, refused by the solver {refused}, undecided {undecided}");
+    if undecided > 0 {
+        println!(
+            "An undecided query means the solver did not answer — a timeout, or a crash. \
+             Nothing undecided was published."
+        );
+    }
+    if stored == 0 {
+        return Err("nothing was stored".to_owned());
+    }
+    Ok(())
+}
+
+/// Fill the store with Slitherlink puzzles.
+///
+/// Shorter than the Nonogram loop above for one reason only: this game has no
+/// difficulty levels yet, so there is no band to loop over. Everything else is the
+/// same shape, and deliberately so — generate, ask a real solver, store only what the
+/// solver vouched for.
+fn fill_slitherlink(
+    store: &Store,
+    signer: &Ed25519Signer,
+    trusted: &TrustedKeys,
+    solver: &ExternalSolver,
+    shape: Shape,
+    wanted: usize,
+    seeds: std::ops::Range<u64>,
+) -> Result<(), String> {
+    println!(
+        "board:  {}x{} cells, loop round {}/1000 of it",
+        shape.width, shape.height, shape.enclosed_per_mille
+    );
+    println!();
+
+    let mut stored = 0usize;
+    let mut rejected = 0usize;
+    let mut refused = 0usize;
+    let mut undecided = 0usize;
+    let mut seed = seeds.start;
+
+    while stored < wanted && seed < seeds.end {
+        let this_seed = seed;
+        seed += 1;
+        let candidate = match propose(this_seed, shape, REMOVAL_BUDGET) {
+            Ok(c) => c,
+            // A size the board rules refuse is a bad flag, not a bad seed, and no later
+            // seed will fix it. Everything else is this seed's luck.
+            Err(gs_slitherlink::generate::Rejected::Size(e)) => {
+                return Err(format!("--size is not a board this game can make: {e:?}"))
+            }
+            Err(_) => {
+                rejected += 1;
+                continue;
+            }
+        };
+        match sl_publish::publish(
+            &candidate,
+            solver,
+            sl_solve::Budget::default(),
+            &Sha256,
+            signer,
+        ) {
+            Ok(published) => {
+                let witness =
+                    match sl_solve::solve(&candidate.puzzle, sl_solve::Budget::default()).witness {
+                        Some(w) => w.canonical_bytes(),
+                        // A published puzzle has a replayed witness by definition, so this
+                        // cannot happen without a bug. Reported rather than unwrapped: a
+                        // batch run should not die on one puzzle.
+                        None => {
+                            eprintln!("  seed {this_seed}: published but has no witness; skipped");
+                            continue;
+                        }
+                    };
+                match store.put(&published.package, &witness, &Sha256, trusted) {
+                    Ok(id) => {
+                        stored += 1;
+                        println!(
+                            "  {} seed {this_seed}, {} numbers left, {} questions asked",
+                            id.to_hex(),
+                            candidate.puzzle.clues.given_count(),
+                            candidate.questions_asked
+                        );
+                    }
+                    // Two seeds can produce the same numbers. Not an error.
+                    Err(gs_store::StoreError::AlreadyStored(_)) => continue,
+                    Err(e) => return Err(format!("storing seed {this_seed}: {e}")),
+                }
+            }
+            Err(sl_publish::PublishError::Refused { report, .. }) => {
+                if report.has_undecided_query() {
+                    undecided += 1;
+                } else {
+                    refused += 1;
+                }
+            }
+            Err(sl_publish::PublishError::Unaskable(_)) => refused += 1,
+            Err(sl_publish::PublishError::Encoding(e)) => {
+                return Err(format!("encoding seed {this_seed}: {e:?}"))
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "stored {stored}, dropped while generating {rejected}, \
+         refused by the solver {refused}, undecided {undecided}"
+    );
+    if stored < wanted {
+        // Said out loud, never hidden. A worker that quietly delivered fewer puzzles
+        // than asked would be discovered as an empty shelf in front of a player.
+        println!("wanted {wanted} — short by {}", wanted - stored);
+    }
     if undecided > 0 {
         println!(
             "An undecided query means the solver did not answer — a timeout, or a crash. \

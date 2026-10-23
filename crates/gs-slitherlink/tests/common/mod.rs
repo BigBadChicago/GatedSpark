@@ -1,5 +1,12 @@
 //! Fixtures the tests share: drawing loops on a board by hand.
 
+// Shared by every test file in this crate. Each test binary gets its own copy of this
+// module and uses some of it, so every helper is unused somewhere. CI builds with
+// warnings as errors, and the alternative is splitting the helpers by which file wants
+// them, which is a worse arrangement than this line. Same reasoning as
+// `gs-offline/tests/common/mod.rs`.
+#![allow(dead_code)]
+
 use gs_slitherlink::board::Geometry;
 use gs_slitherlink::loops::Loop;
 

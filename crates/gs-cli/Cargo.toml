@@ -18,5 +18,6 @@ getrandom = "0.4.3"
 gs-core = { path = "../gs-core" }
 gs-crypto = { path = "../gs-crypto" }
 gs-nonogram = { path = "../gs-nonogram" }
+gs-slitherlink = { path = "../gs-slitherlink" }
 gs-solver = { path = "../gs-solver" }
 gs-store = { path = "../gs-store" }
