@@ -225,19 +225,23 @@ fn a_truncated_download_is_refused_rather_than_half_drawn() {
 
 #[test]
 fn another_games_puzzle_is_refused_rather_than_attempted() {
-    // A reader with one family's rules in it cannot judge another's. The package is
+    // A reader cannot judge the rules of a game it does not have. The package is
     // genuinely and correctly signed, which is the point: the signature is not what is
     // wrong with it.
+    //
+    // The name used to be "slitherlink", until the page learnt to play Slitherlink and
+    // this test started passing for the wrong reason. A game nobody has written is the
+    // only name that stays a stranger.
     let candidate = a_candidate();
     let report =
         report_for(&candidate, &agreeing_solver(), Budget::default()).expect("can be asked about");
     let mut manifest = manifest_for(&candidate, &report);
-    manifest.family = "slitherlink".to_owned();
+    manifest.family = "a-game-nobody-has-written".to_owned();
     let sealed = seal(&manifest, &Sha256, &our_signer()).expect("seals");
 
     match load(&sealed.bytes, &Sha256, &the_page_trusts_us()) {
         Err(NotPlayable::WrongFamily { package_says }) => {
-            assert_eq!(package_says, "slitherlink");
+            assert_eq!(package_says, "a-game-nobody-has-written");
         }
         other => panic!("another game's puzzle must be refused, got {other:?}"),
     }
@@ -277,7 +281,13 @@ fn the_version_this_build_implements_is_the_one_it_accepts() {
     let published = a_real_puzzle();
     let playable = load(&published.package, &Sha256, &the_page_trusts_us())
         .expect("a package this build published is one this build accepts");
-    assert_eq!(playable.clues.dims, playable.dims());
+    assert_eq!(
+        playable
+            .nonogram()
+            .expect("a Nonogram package loads as a Nonogram")
+            .dims,
+        playable.dims()
+    );
     assert_eq!(FAMILY.0, "nonogram");
 }
 
@@ -328,7 +338,7 @@ fn every_refusal_explains_itself_in_words_a_person_can_read() {
         report_for(&candidate, &agreeing_solver(), Budget::default()).expect("can be asked about");
 
     let mut wrong_family = manifest_for(&candidate, &report);
-    wrong_family.family = "slitherlink".to_owned();
+    wrong_family.family = "a-game-nobody-has-written".to_owned();
     let mut wrong_version = manifest_for(&candidate, &report);
     wrong_version.ruleset_version = RULESET_VERSION + 1;
     let mut unreadable = manifest_for(&candidate, &report);
@@ -347,7 +357,7 @@ fn every_refusal_explains_itself_in_words_a_person_can_read() {
                 &Sha256,
                 &the_page_trusts_us(),
             ),
-            "slitherlink",
+            "a-game-nobody-has-written",
         ),
         (
             load(
@@ -440,7 +450,10 @@ fn every_single_reason_a_package_can_be_refused_is_written_in_words() {
     }
 
     // The same for an unreadable board, which is the other reason with a nested cause.
-    let shown = NotPlayable::UnreadablePuzzle(DecodeError::TrailingBytes(3)).to_string();
+    let shown = NotPlayable::UnreadablePuzzle(gs_web::BoardProblem::Nonogram(
+        DecodeError::TrailingBytes(3),
+    ))
+    .to_string();
     assert!(reads_as_words(&shown), "not words a person reads: {shown}");
 }
 

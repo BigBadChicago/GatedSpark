@@ -17,7 +17,8 @@ use gs_crypto::{Ed25519Signer, Sha256};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::rules::{mark_of, Nonogram};
 use gs_nonogram::solve::{solve, Budget};
-use gs_web::play::{Mark, NoChange, Session};
+use gs_web::play::nonogram::{Mark, Session};
+use gs_web::play::NoChange;
 use gs_web::{load, Playable};
 
 const TEST_ONLY_PRIVATE_KEY: [u8; 32] = [
@@ -45,6 +46,13 @@ impl Verifier for AgreesWithAUniquePuzzle {
         *asked += 1;
         answer
     }
+}
+
+/// The clue numbers of a puzzle these tests know is a Nonogram.
+fn clues_of(puzzle: &Playable) -> &gs_nonogram::clues::Clues {
+    puzzle
+        .nonogram()
+        .expect("every puzzle in this file is a Nonogram")
 }
 
 /// A real puzzle, loaded the way a browser loads one.
@@ -80,11 +88,12 @@ fn a_loaded_puzzle() -> Playable {
 /// here. A test that typed out a board would be checking the session against a puzzle of
 /// its own.
 fn the_answer(puzzle: &Playable) -> Vec<Mark> {
-    let rules = Nonogram::new(puzzle.clues.clone());
+    let clues = clues_of(puzzle);
+    let rules = Nonogram::new(clues.clone());
     let state = solve(&rules, Budget::default())
         .witness
         .expect("a uniquely solvable puzzle has an answer");
-    (0..puzzle.clues.dims.cell_count())
+    (0..clues.dims.cell_count())
         .map(|i| {
             let cell = state
                 .get(u32::try_from(i).expect("a board this size fits"))
@@ -119,8 +128,8 @@ fn play_the_answer(session: &mut Session, answer: &[Mark]) {
 #[test]
 fn a_new_game_is_blank_and_unsolved() {
     let puzzle = a_loaded_puzzle();
-    let dims = puzzle.clues.dims;
-    let session = Session::start(puzzle);
+    let dims = clues_of(&puzzle).dims;
+    let session = Session::start(puzzle).expect("these tests load Nonograms");
 
     assert!(!session.is_solved(), "a blank board is not a solved board");
     assert_eq!(session.moves_made(), 0);
@@ -142,7 +151,7 @@ fn playing_the_real_answer_solves_the_puzzle() {
     // Everything else here is scaffolding around this.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     assert!(!session.is_solved());
     play_the_answer(&mut session, &answer);
@@ -158,7 +167,7 @@ fn a_board_one_filled_square_short_is_not_solved() {
     // would pass while meaning nothing.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     play_the_answer(&mut session, &answer);
     assert!(session.is_solved());
 
@@ -189,7 +198,7 @@ fn clearing_a_crossed_out_square_leaves_the_puzzle_solved() {
         blank_squares > 0,
         "this test needs a puzzle whose answer leaves some squares blank"
     );
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     play_the_answer(&mut session, &answer);
     assert!(session.is_solved());
 
@@ -214,7 +223,7 @@ fn a_board_with_only_its_filled_squares_marked_is_solved() {
     // finished. This is the whole of the change made on 2026-10-23.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     for (i, &mark) in answer.iter().enumerate() {
         if mark == Mark::Filled {
@@ -242,7 +251,7 @@ fn a_full_board_with_a_wrong_square_is_not_solved() {
     // rules about the clues instead.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     play_the_answer(&mut session, &answer);
 
     let a_square = answer
@@ -269,8 +278,8 @@ fn filling_every_square_does_not_solve_it() {
     if answer.iter().all(|&m| m == Mark::Filled) {
         return;
     }
-    let count = u32::try_from(puzzle.clues.dims.cell_count()).expect("fits");
-    let mut session = Session::start(puzzle);
+    let count = u32::try_from(clues_of(&puzzle).dims.cell_count()).expect("fits");
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     for i in 0..count {
         let _ = session.mark(i, Mark::Filled);
     }
@@ -287,7 +296,7 @@ fn solving_then_undoing_one_move_is_no_longer_solved() {
     // away.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     play_the_answer(&mut session, &answer);
     // End on a filled square, so that the move being undone is one the rules care
     // about. Since 2026-10-23 undoing a cross-out does not unfinish a board, so an
@@ -328,7 +337,7 @@ fn solving_then_undoing_one_move_is_no_longer_solved() {
 #[test]
 fn a_mark_shows_up_and_undo_takes_it_back_exactly() {
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     session.mark(0, Mark::Filled).expect("a legal first move");
     assert_eq!(session.mark_of(0), Mark::Filled);
@@ -353,7 +362,7 @@ fn clearing_a_square_is_a_move_and_not_an_undo() {
     // A player retracting a guess has not undone it, they have made a new move. The
     // difference is visible in whether redo has anything to do.
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     session.mark(0, Mark::Filled).expect("mark it");
     session.mark(0, Mark::Unknown).expect("clear it");
 
@@ -373,7 +382,7 @@ fn clearing_a_square_is_a_move_and_not_an_undo() {
 #[test]
 fn undo_at_the_start_and_redo_at_the_end_say_so() {
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     assert_eq!(session.undo(), Err(NoChange::AtTheStart));
     assert_eq!(session.redo(), Err(NoChange::NothingToRedo));
 
@@ -388,7 +397,7 @@ fn undo_at_the_start_and_redo_at_the_end_say_so() {
 #[test]
 fn marking_a_square_the_way_it_already_is_changes_nothing() {
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     session.mark(0, Mark::Filled).expect("the first move");
     assert_eq!(session.mark(0, Mark::Filled), Err(NoChange::AlreadyThatWay));
     assert_eq!(
@@ -401,8 +410,8 @@ fn marking_a_square_the_way_it_already_is_changes_nothing() {
 #[test]
 fn a_square_that_is_not_on_the_board_is_refused() {
     let puzzle = a_loaded_puzzle();
-    let count = u32::try_from(puzzle.clues.dims.cell_count()).expect("fits");
-    let mut session = Session::start(puzzle);
+    let count = u32::try_from(clues_of(&puzzle).dims.cell_count()).expect("fits");
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     assert_eq!(
         session.mark(count, Mark::Filled),
@@ -423,8 +432,8 @@ fn a_column_past_the_edge_does_not_wrap_onto_the_next_row() {
     // first square of row 1, and a player tapping just outside the board would mark a
     // square somewhere else entirely.
     let puzzle = a_loaded_puzzle();
-    let dims = puzzle.clues.dims;
-    let mut session = Session::start(puzzle);
+    let dims = clues_of(&puzzle).dims;
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     assert_eq!(
         session.mark_at(0, dims.width, Mark::Filled),
@@ -449,8 +458,8 @@ fn a_column_past_the_edge_does_not_wrap_onto_the_next_row() {
 #[test]
 fn rows_and_columns_land_where_a_page_expects() {
     let puzzle = a_loaded_puzzle();
-    let dims = puzzle.clues.dims;
-    let mut session = Session::start(puzzle);
+    let dims = clues_of(&puzzle).dims;
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     session
         .mark_at(1, 0, Mark::Filled)
@@ -478,7 +487,7 @@ fn the_board_fingerprint_matches_the_board_bytes() {
     // hashing the state and hashing its canonical bytes have to agree. Without it, a
     // stored board could not be compared to the number in a published report.
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     for i in 0..3u32 {
         let _ = session.mark(i, Mark::Filled);
     }
@@ -491,7 +500,7 @@ fn the_board_fingerprint_matches_the_board_bytes() {
 #[test]
 fn the_fingerprint_changes_with_the_board_and_comes_back_on_undo() {
     let puzzle = a_loaded_puzzle();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     let blank = session.board_fingerprint();
 
     session.mark(0, Mark::Filled).expect("a move");
@@ -514,7 +523,7 @@ fn a_session_still_knows_which_puzzle_it_is() {
     let puzzle = a_loaded_puzzle();
     let fingerprint = puzzle.content_id;
     let signed_by = puzzle.signed_by.clone();
-    let mut session = Session::start(puzzle);
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
     session.mark(0, Mark::Filled).expect("a move");
 
     // Playing does not detach a board from the puzzle it belongs to, which is what lets
@@ -529,8 +538,8 @@ fn the_session_agrees_with_the_rules_about_being_solved() {
     // rules' answer, asked separately, over a board that changes under both.
     let puzzle = a_loaded_puzzle();
     let answer = the_answer(&puzzle);
-    let rules = Nonogram::new(puzzle.clues.clone());
-    let mut session = Session::start(puzzle);
+    let rules = Nonogram::new(clues_of(&puzzle).clone());
+    let mut session = Session::start(puzzle).expect("these tests load Nonograms");
 
     // A second board, kept in step by hand through the rules themselves rather than
     // through the session. Two paths to the same board, and the rules asked about each.

@@ -18,7 +18,9 @@ use wasm_bindgen::prelude::*;
 
 use gs_crypto::{Sha256, TrustedKeys};
 
-use crate::play::{Mark, Session};
+use crate::play::nonogram::Mark;
+use crate::play::slitherlink::{Line, Which};
+use crate::play::Session;
 use crate::{load, Playable};
 
 /// The page, holding the keys it will accept puzzles from.
@@ -110,6 +112,13 @@ pub struct Puzzle {
 
 #[wasm_bindgen]
 impl Puzzle {
+    /// Which game this is: the first thing a page needs, because it decides what the
+    /// page draws and which moves it may make.
+    #[must_use]
+    pub fn family(&self) -> String {
+        self.playable.family().to_owned()
+    }
+
     #[must_use]
     pub fn width(&self) -> u16 {
         self.playable.dims().width
@@ -238,7 +247,9 @@ impl Game {
     /// than an error, because those are ordinary during play and a page should not have
     /// to catch an exception to find out somebody tapped twice.
     pub fn mark(&mut self, row: u16, column: u16, square: Square) -> bool {
-        self.session.mark_at(row, column, square.into()).is_ok()
+        self.session
+            .as_nonogram()
+            .is_some_and(|game| game.mark_at(row, column, square.into()).is_ok())
     }
 
     /// Why the last `mark` did nothing, or an empty string if it did something.
@@ -246,9 +257,16 @@ impl Game {
     /// Separate from `mark` so the common path stays a plain yes or no. A page showing
     /// a message needs this; a page just drawing a board does not.
     pub fn mark_and_say(&mut self, row: u16, column: u16, square: Square) -> String {
-        match self.session.mark_at(row, column, square.into()) {
-            Ok(()) => String::new(),
-            Err(why) => why.to_string(),
+        let game = self.session.puzzle().family();
+        match self.session.as_nonogram() {
+            Some(session) => match session.mark_at(row, column, square.into()) {
+                Ok(()) => String::new(),
+                Err(why) => why.to_string(),
+            },
+            // Not silence and not `false`. A page making a move the game does not have
+            // has a bug in it, and the quietest possible answer is the one that takes
+            // longest to find.
+            None => format!("marking a square is not a move in {game}"),
         }
     }
 
@@ -266,7 +284,10 @@ impl Game {
     /// draws a board in a loop and a thrown error there is a blank page.
     #[must_use]
     pub fn square(&self, row: u16, column: u16) -> Square {
-        self.session.mark_at_of(row, column).into()
+        match &self.session {
+            Session::Nonogram(game) => game.mark_at_of(row, column).into(),
+            Session::Slitherlink(_) => Square::Unknown,
+        }
     }
 
     /// The whole board in one call, row by row from the top left.
@@ -277,13 +298,16 @@ impl Game {
     /// cannot drift from what `square` would say.
     #[must_use]
     pub fn board(&self) -> Vec<u8> {
-        let dims = self.session.puzzle().clues.dims;
+        let Session::Nonogram(game) = &self.session else {
+            return Vec::new();
+        };
+        let dims = self.session.puzzle().dims();
         (0..dims.height)
             .flat_map(|row| {
                 (0..dims.width).map(move |column| {
                     // `as` on a fieldless enum is its discriminant, which is the value
                     // the page reads. The numbers live on `Square` and nowhere else.
-                    Square::from(self.session.mark_at_of(row, column)) as u8
+                    Square::from(game.mark_at_of(row, column)) as u8
                 })
             })
             .collect()
@@ -313,6 +337,13 @@ impl Game {
     // The puzzle's own details, so a page can show "signed by, level, one answer only"
     // while somebody plays. Reading them from the session rather than keeping a second
     // copy, for the usual reason.
+
+    /// Which game is being played, so a page can draw the right board and offer the
+    /// right moves.
+    #[must_use]
+    pub fn family(&self) -> String {
+        self.session.puzzle().family().to_owned()
+    }
 
     #[must_use]
     pub fn width(&self) -> u16 {
@@ -357,5 +388,195 @@ impl Game {
             .get(index)
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The Slitherlink half
+// ---------------------------------------------------------------------------
+
+/// Which way a line runs, in the shape a web page can switch on.
+///
+/// A separate type from [`crate::play::slitherlink::Which`] for the same reason
+/// [`Square`] is separate from `Mark`: `#[wasm_bindgen]` cannot go in a module that also
+/// compiles for an ordinary machine, so this is the translation and the conversion below
+/// is the only place the mapping exists.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// Left to right.
+    Across = 0,
+    /// Top to bottom.
+    Down = 1,
+}
+
+impl From<Side> for Which {
+    fn from(side: Side) -> Which {
+        match side {
+            Side::Across => Which::Across,
+            Side::Down => Which::Down,
+        }
+    }
+}
+
+/// What one line holds, in the shape a web page can switch on.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drawn {
+    /// Part of the loop.
+    Yes = 0,
+    /// Definitely not part of the loop.
+    No = 1,
+    /// Not decided yet.
+    Unknown = 2,
+}
+
+impl From<Drawn> for Line {
+    fn from(drawn: Drawn) -> Line {
+        match drawn {
+            Drawn::Yes => Line::Drawn,
+            Drawn::No => Line::RuledOut,
+            Drawn::Unknown => Line::Unknown,
+        }
+    }
+}
+
+impl From<Line> for Drawn {
+    fn from(line: Line) -> Drawn {
+        match line {
+            Line::Drawn => Drawn::Yes,
+            Line::RuledOut => Drawn::No,
+            Line::Unknown => Drawn::Unknown,
+        }
+    }
+}
+
+/// The Slitherlink moves and readings.
+///
+/// Every one of these is nothing on a game of some other family: `false`, an empty list,
+/// or a sentence saying so. None of them guesses at an equivalent move in the game it
+/// actually has.
+#[wasm_bindgen]
+impl Game {
+    /// How many dots there are across the board. One more than the squares.
+    #[must_use]
+    pub fn dots_across(&self) -> u16 {
+        match &self.session {
+            Session::Slitherlink(game) => game.geometry().dots_across(),
+            Session::Nonogram(_) => 0,
+        }
+    }
+
+    /// How many dots there are down the board. One more than the squares.
+    #[must_use]
+    pub fn dots_down(&self) -> u16 {
+        match &self.session {
+            Session::Slitherlink(game) => game.geometry().dots_down(),
+            Session::Nonogram(_) => 0,
+        }
+    }
+
+    /// Draw a line, rule one out, or clear either.
+    ///
+    /// `column` and `row` name the dot the line starts at, counting from the top-left
+    /// corner. Returns `true` if the board changed. A tap that changes nothing — a line
+    /// already marked that way, or one off the edge of the board — is `false` rather
+    /// than an error, because those are ordinary during play.
+    pub fn draw(&mut self, side: Side, column: u16, row: u16, drawn: Drawn) -> bool {
+        self.session
+            .as_slitherlink()
+            .is_some_and(|game| game.mark(side.into(), column, row, drawn.into()).is_ok())
+    }
+
+    /// Why the last `draw` did nothing, or an empty string if it did something.
+    pub fn draw_and_say(&mut self, side: Side, column: u16, row: u16, drawn: Drawn) -> String {
+        let game = self.session.puzzle().family();
+        match self.session.as_slitherlink() {
+            Some(session) => match session.mark(side.into(), column, row, drawn.into()) {
+                Ok(()) => String::new(),
+                Err(why) => why.to_string(),
+            },
+            None => format!("drawing a line is not a move in {game}"),
+        }
+    }
+
+    /// How one line is marked. A line off the board reads as undecided.
+    #[must_use]
+    pub fn line(&self, side: Side, column: u16, row: u16) -> Drawn {
+        match &self.session {
+            Session::Slitherlink(game) => game.line_at(side.into(), column, row).into(),
+            Session::Nonogram(_) => Drawn::Unknown,
+        }
+    }
+
+    /// Every line on the board in one call: the ones running across first, row by row
+    /// from the top, then the ones running down, column by column from the left.
+    ///
+    /// Each byte is a [`Drawn`] value. This is for drawing: asking line by line across
+    /// the boundary is one call per line, and a 10 by 10 board has 220 of them. It is
+    /// derived fresh from the same board each time, so it cannot drift from what `line`
+    /// would say.
+    #[must_use]
+    pub fn lines(&self) -> Vec<u8> {
+        let Session::Slitherlink(game) = &self.session else {
+            return Vec::new();
+        };
+        game.geometry()
+            .edges()
+            .map(|edge| Drawn::from(game.line_of(edge)) as u8)
+            .collect()
+    }
+
+    /// The number in one square, or `-1` where there is none.
+    ///
+    /// Most squares have no number, and that is the puzzle. `-1` rather than `0`,
+    /// because `0` is a real number a square can carry and means something quite
+    /// different: no sides of this square are used at all.
+    #[must_use]
+    pub fn number(&self, column: u16, row: u16) -> i16 {
+        match &self.session {
+            Session::Slitherlink(game) => game.number_at(column, row).map_or(-1, i16::from),
+            Session::Nonogram(_) => -1,
+        }
+    }
+
+    /// How many sides of one square the player has drawn so far. `-1` on another game.
+    ///
+    /// Comes from the rules, so the count shown beside a number and the count the rules
+    /// judge are the same count.
+    #[must_use]
+    pub fn sides_drawn(&self, column: u16, row: u16) -> i16 {
+        match &self.session {
+            Session::Slitherlink(game) => game.sides_drawn(column, row).map_or(-1, i16::from),
+            Session::Nonogram(_) => -1,
+        }
+    }
+
+    /// What the drawn lines add up to at the moment, in a sentence a player can read:
+    /// one loop, nothing yet, a loose end, a crossing, or several separate loops.
+    ///
+    /// The sentence comes from `gs-slitherlink`, not from here. A page writing its own
+    /// would be a second opinion about the state of the board.
+    #[must_use]
+    pub fn shape(&self) -> String {
+        match &self.session {
+            Session::Slitherlink(game) => game.shape().plainly().to_owned(),
+            Session::Nonogram(_) => String::new(),
+        }
+    }
+
+    /// The squares whose numbers are not yet met, as pairs of column and row.
+    ///
+    /// Not "wrong squares": a number not yet met is the ordinary state of a puzzle being
+    /// played. A page may use this to show a player where to look.
+    #[must_use]
+    pub fn numbers_not_met(&self) -> Vec<u16> {
+        let Session::Slitherlink(game) = &self.session else {
+            return Vec::new();
+        };
+        game.numbers_not_met()
+            .into_iter()
+            .flat_map(|(column, row)| [column, row])
+            .collect()
     }
 }

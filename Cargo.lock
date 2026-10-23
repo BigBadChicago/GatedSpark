@@ -263,6 +263,7 @@ dependencies = [
  "gs-crypto",
  "gs-nonogram",
  "gs-offline",
+ "gs-slitherlink",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",

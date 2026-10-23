@@ -86,6 +86,10 @@ fn the_browser_contains_exactly_what_it_is_supposed_to() {
             "gs-crypto".to_owned(),
             "gs-nonogram".to_owned(),
             "gs-offline".to_owned(),
+            // Added 2026-10-23, deliberately: the page plays two games, so it carries
+            // two games' rules. It still carries no solver runner and no store, which
+            // is what the other half of this file is about.
+            "gs-slitherlink".to_owned(),
             "gs-web".to_owned(),
         ],
         "what is compiled into the browser changed. That is a decision, not a detail."
