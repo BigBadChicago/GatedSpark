@@ -20,6 +20,9 @@ const URL = process.argv[4] ?? 'http://127.0.0.1:8099/';
 // The puzzle check-page.sh has published a withdrawal list for. The list is on the
 // server from the start; this device knows nothing about it until the page asks.
 const DOOMED = process.argv[5];
+// The loop puzzle, driven at the end. A different game on the same page, from the same
+// store, checked by the same key.
+const LOOP = process.argv[6];
 
 /** The witness file is a canonical board: width, height, count, then one i16 per cell. */
 function filledSquares(path) {
@@ -37,6 +40,18 @@ function filledSquares(path) {
   return { width, height, filled, empty };
 }
 
+/** For the loop game the witness is one cell per line, in the order the core reports
+ *  the lines, so the answer is just which of them are drawn. */
+function drawnLines(path) {
+  const bytes = readFileSync(path);
+  const count = bytes.readUInt32LE(4);
+  const drawn = [];
+  for (let i = 0; i < count; i += 1) {
+    if (bytes.readInt16LE(8 + i * 2) === 1) drawn.push(i);
+  }
+  return { count, drawn };
+}
+
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 430, height: 940 } });
 
@@ -50,6 +65,34 @@ const fail = async (why, shot) => {
   await browser.close();
   process.exit(1);
 };
+
+/** Lay the stored answer into whatever game is on the screen.
+ *
+ *  The answer comes out of the witness file beside the package — the one the solver
+ *  vouched for and the store checked — rather than being worked out here. */
+async function layTheAnswerIn(fingerprint) {
+  const witness = `${WWW}/store/${fingerprint}/witness.bin`;
+  const family = await page.evaluate(() => window.gatedspark.family());
+  if (family === 'slitherlink') {
+    const { count, drawn } = drawnLines(witness);
+    const laid = await page.evaluate((want) => {
+      const places = window.gatedspark.linePlaces();
+      if (places.length / 3 !== want.count) {
+        return `the page has ${places.length / 3} lines and the answer has ${want.count}`;
+      }
+      for (const i of want.drawn) {
+        window.gatedspark.tapLine(places[i * 3], places[i * 3 + 1], places[i * 3 + 2]);
+      }
+      return null;
+    }, { count, drawn });
+    if (laid) await fail(laid, 'loop-witness');
+  } else {
+    const answer = filledSquares(witness);
+    await page.evaluate((filled) => {
+      for (const [row, column] of filled) window.gatedspark.tap(row, column);
+    }, answer.filled);
+  }
+}
 
 await page.goto(URL, { waitUntil: 'networkidle' });
 if (await page.locator('#refused').isVisible()) {
@@ -249,21 +292,26 @@ const playingSaved = await page.evaluate(() => ({
   refusal: window.gatedspark.refusal(),
   fingerprint: window.gatedspark.fingerprint(),
   saved: window.gatedspark.savedLine(),
-  squares: document.querySelectorAll('td.square').length,
+  family: window.gatedspark.family(),
+  // Either game's board, because the buffer hands back whichever was saved.
+  parts:
+    document.querySelectorAll('td.square').length +
+    document.querySelectorAll('#loop g.edge').length,
 }));
 console.log('playing a saved one with no signal ' + JSON.stringify(playingSaved));
 if (playingSaved.refusal) await fail('a saved puzzle should open with no signal', 'saved-play');
-if (playingSaved.squares === 0) await fail('a saved puzzle should draw a board', 'saved-play');
+if (playingSaved.parts === 0) await fail('a saved puzzle should draw a board', 'saved-play');
 if (!/3 puzzles saved/.test(playingSaved.saved)) {
   await fail('being handed a saved puzzle is not playing it, so the count must not drop', 'delivered-not-played');
 }
 await page.screenshot({ path: OUT + '/playing-saved.png', fullPage: true });
 
 // Finish it. Only now does the count drop.
-const savedAnswer = filledSquares(`${WWW}/store/${playingSaved.fingerprint}/witness.bin`);
-await page.evaluate((filled) => {
-  for (const [row, column] of filled) window.gatedspark.tap(row, column);
-}, savedAnswer.filled);
+//
+// Which game it is decides how. The buffer hands back whatever was saved, and both
+// games are in this store, so a step that assumed squares would work until the day the
+// buffer handed back a loop puzzle — which is exactly what it now does.
+await layTheAnswerIn(playingSaved.fingerprint);
 const afterFinishing = await page.evaluate(() => ({
   solved: window.gatedspark.isSolved(),
   saved: window.gatedspark.savedLine(),
@@ -278,11 +326,7 @@ await page.screenshot({ path: OUT + '/saved-solved.png', fullPage: true });
 // Play the last two out, and check the ending is a sentence rather than a blank screen.
 for (let i = 0; i < 2; i += 1) {
   await page.evaluate(() => window.gatedspark.playSaved());
-  const fingerprint = await page.evaluate(() => window.gatedspark.fingerprint());
-  const answer = filledSquares(`${WWW}/store/${fingerprint}/witness.bin`);
-  await page.evaluate((filled) => {
-    for (const [row, column] of filled) window.gatedspark.tap(row, column);
-  }, answer.filled);
+  await layTheAnswerIn(await page.evaluate(() => window.gatedspark.fingerprint()));
 }
 await page.evaluate(() => window.gatedspark.playSaved());
 const ranOut = await page.evaluate(() => ({
@@ -410,7 +454,146 @@ if (replayed.seen !== '1') await fail('the number this device goes by must not m
 if (!/1 puzzle saved/.test(replayed.saved)) await fail('nothing more should have been deleted: ' + replayed.saved, 'replayed');
 await page.screenshot({ path: OUT + '/withdrawal-replayed.png', fullPage: true });
 
-console.log('console problems after the withdrawal ' + JSON.stringify(problems));
+// ---------------------------------------------------------------------------
+// The second game, on the same page
+// ---------------------------------------------------------------------------
+//
+// Everything above was a picture puzzle. This is a loop puzzle, from the same store,
+// opened by the same page, checked against the same key. What is being proved is that
+// the page draws the right board for the game it was handed, that tapping between two
+// dots draws a line, and that "solved" still comes from the rules — which here means
+// one loop AND every number met, not either one on its own.
+
+if (!LOOP) {
+  console.log('no loop puzzle was named, so the second game was not driven');
+} else {
+  // A fresh page, because the one above has a withdrawn puzzle and a used-up buffer.
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.evaluate(() => window.gatedspark.forgetEverythingSaved());
+  await page.evaluate((name) => window.gatedspark.open(name), LOOP);
+  await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
+
+  const loop = await page.evaluate(() => ({
+    family: window.gatedspark.family(),
+    level: document.getElementById('level').textContent,
+    encoding: document.getElementById('encoding').textContent,
+    squares: document.querySelectorAll('td.square').length,
+    gridShowing: !document.getElementById('board').hidden,
+    gridEmptied: document.querySelectorAll('td.square').length === 0,
+    // `hasAttribute`, not `.hidden`: see the note in the page. Asking the wrong one
+    // here agreed with the page's own mistake and reported an invisible board as shown.
+    loopShowing: !document.getElementById('loop').hasAttribute('hidden'),
+    loopSize: document.getElementById('loop').getBoundingClientRect().width,
+    lines: window.gatedspark.linesOnTheBoard(),
+    numbers: window.gatedspark.numbersOnTheBoard(),
+    dots: document.querySelectorAll('#loop circle.dot').length,
+    shape: window.gatedspark.shapeSaid(),
+    solved: window.gatedspark.isSolved(),
+  }));
+  console.log('loop puzzle ' + JSON.stringify(loop));
+  if (loop.family !== 'slitherlink') await fail('the wrong game was opened: ' + loop.family, 'loop-wrong-game');
+  if (loop.gridShowing) await fail('a grid of squares was drawn for a loop puzzle', 'loop-grid');
+  if (!loop.gridEmptied) await fail('the other game\'s board was left on the page', 'loop-grid');
+  if (!loop.loopShowing) await fail('no loop board was drawn', 'loop-empty');
+  if (loop.loopSize < 100) await fail('the loop board is on the page but has no size: ' + loop.loopSize, 'loop-empty');
+  if (loop.lines === 0) await fail('no lines were drawn to tap', 'loop-empty');
+  if (loop.numbers === 0) await fail('no numbers were drawn', 'loop-empty');
+  if (loop.dots === 0) await fail('no dots were drawn', 'loop-empty');
+  if (loop.level !== 'none given') await fail('this game has no levels, and the page must not invent one', 'loop-level');
+  if (!/loop/.test(loop.encoding)) await fail('the uniqueness claim should name the encoding: ' + loop.encoding, 'loop-encoding');
+  if (!/no lines are drawn yet/.test(loop.shape)) await fail('a blank board should say so: ' + loop.shape, 'loop-shape');
+  if (loop.solved) await fail('it said solved before a single tap', 'loop-wrongly-solved');
+
+  // Tap one line on, round to ruled out, and back to blank. Three states, one line.
+  const first = await page.evaluate(() => {
+    const places = window.gatedspark.linePlaces();
+    return [places[0], places[1], places[2]];
+  });
+  const cycle = [];
+  for (let i = 0; i < 3; i += 1) {
+    await page.evaluate((at) => window.gatedspark.tapLine(at[0], at[1], at[2]), first);
+    cycle.push(await page.evaluate((at) => window.gatedspark.lineAt(at[0], at[1], at[2]), first));
+  }
+  console.log('one line tapped three times ' + JSON.stringify(cycle));
+  if (cycle[0] !== 0) await fail('a tap did not draw the line', 'loop-tap');
+  if (cycle[1] !== 1) await fail('a second tap did not rule it out', 'loop-tap');
+  if (cycle[2] !== 2) await fail('a third tap did not clear it', 'loop-tap');
+
+  const afterOne = await page.evaluate((at) => {
+    window.gatedspark.tapLine(at[0], at[1], at[2]);
+    return { shape: window.gatedspark.shapeSaid(), solved: window.gatedspark.isSolved() };
+  }, first);
+  console.log('one line drawn ' + JSON.stringify(afterOne));
+  if (!/mid-air/.test(afterOne.shape)) await fail('one line is a loose end, and the page should say so: ' + afterOne.shape, 'loop-shape');
+  if (afterOne.solved) await fail('one line cannot solve a puzzle', 'loop-tap');
+  await page.screenshot({ path: OUT + '/loop-part-played.png', fullPage: true });
+
+  // Now lay the real answer in. It comes out of the witness file beside the package —
+  // the answer the solver vouched for and the store checked — rather than being worked
+  // out here. For this game the witness is one cell per line, in the order the core
+  // reports the lines, so there is nothing to translate.
+  const witness = readFileSync(`${WWW}/store/${LOOP}/witness.bin`);
+  const count = witness.readUInt32LE(4);
+  const drawn = [];
+  for (let i = 0; i < count; i += 1) {
+    if (witness.readInt16LE(8 + i * 2) === 1) drawn.push(i);
+  }
+  if (drawn.length === 0) await fail('the stored answer draws no lines at all', 'loop-witness');
+
+  const laid = await page.evaluate((want) => {
+    const places = window.gatedspark.linePlaces();
+    if (places.length / 3 !== want.count) {
+      return { error: `the page has ${places.length / 3} lines and the answer has ${want.count}` };
+    }
+    // Start from a blank board, so the loose end from the taps above is not left in.
+    while (window.gatedspark.movesMade() > 0) window.gatedspark.undo();
+    for (const i of want.drawn) {
+      window.gatedspark.tapLine(places[i * 3], places[i * 3 + 1], places[i * 3 + 2]);
+    }
+    return {
+      drawn: window.gatedspark.linesDrawn(),
+      shape: window.gatedspark.shapeSaid(),
+      numbersMet: window.gatedspark.numbersMet(),
+      numbers: window.gatedspark.numbersOnTheBoard(),
+      solved: window.gatedspark.isSolved(),
+      solvedShowing: !document.getElementById('solved').hidden,
+      said: document.getElementById('solved').textContent,
+    };
+  }, { drawn, count });
+  console.log('the answer laid in ' + JSON.stringify(laid));
+  if (laid.error) await fail(laid.error, 'loop-witness');
+  if (laid.drawn !== drawn.length) await fail('not every line of the answer went on the board', 'loop-answer');
+  if (!/one closed loop/.test(laid.shape)) await fail('the answer should be one loop: ' + laid.shape, 'loop-answer');
+  if (laid.numbersMet !== laid.numbers) await fail('the answer should meet every number', 'loop-answer');
+  if (!laid.solved) await fail('the real answer was not accepted as solved', 'loop-answer');
+  if (!laid.solvedShowing) await fail('the page did not show the solved message', 'loop-answer');
+  if (!/one loop/i.test(laid.said)) await fail('the solved message should be this game\'s: ' + laid.said, 'loop-answer');
+  await page.screenshot({ path: OUT + '/loop-solved.png', fullPage: true });
+
+  // And taking one line back unsolves it, so nothing on the page is remembering.
+  const afterUndo = await page.evaluate(() => {
+    window.gatedspark.undo();
+    return { solved: window.gatedspark.isSolved(), showing: !document.getElementById('solved').hidden };
+  });
+  console.log('one line taken back ' + JSON.stringify(afterUndo));
+  if (afterUndo.solved || afterUndo.showing) await fail('an undone answer is still being called solved', 'loop-undo');
+
+  // One loop puzzle, saved and brought back. The buffer knows nothing about any game,
+  // and this is what that is worth.
+  const savedLoop = await page.evaluate(() => {
+    window.gatedspark.save();
+    const line = window.gatedspark.savedLine();
+    window.gatedspark.playSaved();
+    return { line, family: window.gatedspark.family(), showing: window.gatedspark.boardIsShowing() };
+  });
+  console.log('a loop puzzle saved and brought back ' + JSON.stringify(savedLoop));
+  if (!/1 puzzle saved/.test(savedLoop.line)) await fail('a loop puzzle was not saved: ' + savedLoop.line, 'loop-saved');
+  if (savedLoop.family !== 'slitherlink') await fail('the saved puzzle came back as another game', 'loop-saved');
+  if (!savedLoop.showing) await fail('the saved puzzle did not come back onto the screen', 'loop-saved');
+  await page.screenshot({ path: OUT + '/loop-saved.png', fullPage: true });
+}
+
+console.log('console problems after both games ' + JSON.stringify(problems));
 await browser.close();
 if (problems.length) { console.log('FAIL: the browser reported errors'); process.exit(1); }
 console.log('OK');

@@ -476,6 +476,34 @@ impl Game {
         }
     }
 
+    /// Where every line on the board is, in the same order [`Game::lines`] reports
+    /// them: three numbers each — `0` for across or `1` for down, then the column and
+    /// row of the dot the line starts at.
+    ///
+    /// This exists so a page never works out the numbering for itself. A page that did
+    /// would hold a second opinion about which line is which, and the day the two
+    /// disagreed it would draw one line and mark another. Instead it builds its lines
+    /// from this list, in this order, and reads their marks from `lines()` at the same
+    /// positions.
+    #[must_use]
+    pub fn line_places(&self) -> Vec<u16> {
+        let Session::Slitherlink(game) = &self.session else {
+            return Vec::new();
+        };
+        let geometry = game.geometry();
+        geometry
+            .edges()
+            .filter_map(|edge| geometry.edge_at(edge))
+            .flat_map(|(along, column, row)| {
+                let side = match along {
+                    gs_slitherlink::board::Along::Across => 0,
+                    gs_slitherlink::board::Along::Down => 1,
+                };
+                [side, column, row]
+            })
+            .collect()
+    }
+
     /// Draw a line, rule one out, or clear either.
     ///
     /// `column` and `row` name the dot the line starts at, counting from the top-left

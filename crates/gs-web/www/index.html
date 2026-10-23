@@ -158,6 +158,27 @@
     color: var(--warn);
   }
   .note { color: var(--muted); font-size: .85rem; min-height: 1.5em; margin: .25rem 0 0; }
+
+  /* ---- the loop game ------------------------------------------------ */
+  /* Drawn as one picture rather than a table of squares, because what a player marks
+     here is the lines between the dots, and a table has no place to put those. */
+  /* Fills the width it is given, up to a size where the dots stop being far apart.
+     A board drawn at its natural size is a board a finger cannot hit on a phone. */
+  #loop { width: 100%; max-width: 26rem; height: auto; touch-action: manipulation; }
+  #loop .dot { fill: var(--muted); }
+  #loop .number { fill: var(--ink); font-size: 13px; text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
+  #loop .number[data-met="yes"] { fill: var(--muted); }
+  /* The wide invisible strip over each line, so a finger has something to hit. */
+  #loop .grab { stroke: transparent; stroke-width: 16; cursor: pointer; }
+  #loop .line { stroke: var(--line); stroke-width: 1; stroke-linecap: round; pointer-events: none; }
+  #loop .edge[data-drawn="0"] .line { stroke: var(--ink); stroke-width: 5; }
+  #loop .edge[data-drawn="1"] .line { stroke: transparent; }
+  /* A line ruled out is shown as a small cross where it would have been, not as a faint
+     line: a faint line and a drawn line are the two things a player must never mix up. */
+  #loop .ruled { stroke: var(--warn); stroke-width: 2.5; stroke-linecap: round; display: none; pointer-events: none; }
+  #loop .edge[data-drawn="1"] .ruled { display: inline; }
+  #loop .edge:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .shape { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
   [hidden] { display: none !important; }
 
   /* ---- what the page checked ---------------------------------------- */
@@ -201,7 +222,9 @@
 
     <div class="board-scroll">
       <table class="board" id="board"></table>
+      <svg id="loop" hidden xmlns="http://www.w3.org/2000/svg" role="group"></svg>
     </div>
+    <p class="shape" id="shape" hidden></p>
 
     <div class="controls">
       <button id="undo" type="button">Undo</button>
@@ -231,7 +254,7 @@
 // opinion here would disagree with the first one day, and the wrong one would be the
 // one the player saw.
 
-import init, { Page, Square } from "./core/gs_web.js";
+import init, { Page, Square, Side, Drawn } from "./core/gs_web.js";
 import { TRUSTED_KEY_ID, TRUSTED_PUBLIC_KEY } from "./trusted-key.js";
 import { PUZZLES } from "./puzzles.js";
 
@@ -251,6 +274,26 @@ const NEXT = {
   [Square.Unknown]: Square.Filled,
   [Square.Filled]: Square.Empty,
   [Square.Empty]: Square.Unknown,
+};
+
+/** The same for a line: undecided, drawn, ruled out, undecided. */
+const NEXT_LINE = {
+  [Drawn.Unknown]: Drawn.Yes,
+  [Drawn.Yes]: Drawn.No,
+  [Drawn.No]: Drawn.Unknown,
+};
+
+/** How far apart the dots are drawn, and how much room is left round the edge. */
+const STEP = 34;
+const MARGIN = 20;
+
+/** What each game tells a player to do. The page's own words, since this is about the
+ *  page's controls rather than about the rules. */
+const HOW_TO = {
+  nonogram:
+    "Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.",
+  slitherlink:
+    "Tap between two dots to draw a line, again to rule it out, again to clear it. Ruling lines out is just for you: the puzzle is done when the lines make one loop and every number is met.",
 };
 
 let game = null;
@@ -320,14 +363,126 @@ function drawBoard() {
   }
 }
 
-/** Copy the core's board onto the page. One call for the whole grid. */
+const SVG = "http://www.w3.org/2000/svg";
+
+function svg(name, attributes) {
+  const node = document.createElementNS(SVG, name);
+  for (const [key, value] of Object.entries(attributes)) {
+    node.setAttribute(key, String(value));
+  }
+  return node;
+}
+
+/** Where a dot is drawn. */
+const at = (column, row) => [MARGIN + column * STEP, MARGIN + row * STEP];
+
+/** Build the loop board once. Taps change lines in place after this.
+ *
+ *  Every line comes from `game.line_places()`, in that order, so this page never works
+ *  out the numbering for itself. The marks arrive later from `game.lines()` at the same
+ *  positions. */
+function drawLoopBoard() {
+  const across = game.dots_across();
+  const down = game.dots_down();
+  const board = el("loop");
+  board.replaceChildren();
+  board.setAttribute("width", MARGIN * 2 + (across - 1) * STEP);
+  board.setAttribute("height", MARGIN * 2 + (down - 1) * STEP);
+  board.setAttribute("viewBox", `0 0 ${MARGIN * 2 + (across - 1) * STEP} ${MARGIN * 2 + (down - 1) * STEP}`);
+  board.setAttribute("aria-label", `a loop puzzle, ${across - 1} squares across and ${down - 1} down`);
+
+  // The numbers in the squares, which a player never changes.
+  for (let row = 0; row < down - 1; row += 1) {
+    for (let column = 0; column < across - 1; column += 1) {
+      const number = game.number(column, row);
+      if (number < 0) continue;
+      const [x, y] = at(column + 0.5, row + 0.5);
+      const text = svg("text", { class: "number", x, y });
+      text.textContent = String(number);
+      text.dataset.column = String(column);
+      text.dataset.row = String(row);
+      board.appendChild(text);
+    }
+  }
+
+  const places = Array.from(game.line_places());
+  for (let i = 0; i < places.length; i += 3) {
+    const side = places[i];
+    const column = places[i + 1];
+    const row = places[i + 2];
+    const [x1, y1] = at(column, row);
+    const [x2, y2] = side === Side.Across ? at(column + 1, row) : at(column, row + 1);
+    const [mx, my] = [(x1 + x2) / 2, (y1 + y2) / 2];
+
+    const edge = svg("g", { class: "edge", "data-drawn": Drawn.Unknown, tabindex: 0, role: "button" });
+    edge.dataset.side = String(side);
+    edge.dataset.column = String(column);
+    edge.dataset.row = String(row);
+    edge.setAttribute(
+      "aria-label",
+      side === Side.Across
+        ? `line across from dot ${column + 1}, ${row + 1}`
+        : `line down from dot ${column + 1}, ${row + 1}`
+    );
+    edge.appendChild(svg("line", { class: "grab", x1, y1, x2, y2 }));
+    edge.appendChild(svg("line", { class: "line", x1, y1, x2, y2 }));
+    edge.appendChild(svg("line", { class: "ruled", x1: mx - 4, y1: my - 4, x2: mx + 4, y2: my + 4 }));
+    edge.appendChild(svg("line", { class: "ruled", x1: mx - 4, y1: my + 4, x2: mx + 4, y2: my - 4 }));
+    board.appendChild(edge);
+  }
+
+  // The dots last, so they sit on top of the lines.
+  for (let row = 0; row < down; row += 1) {
+    for (let column = 0; column < across; column += 1) {
+      const [cx, cy] = at(column, row);
+      board.appendChild(svg("circle", { class: "dot", cx, cy, r: 2.5 }));
+    }
+  }
+}
+
+/** Copy the core's lines onto the page. One call for the whole board. */
+function refreshLoop() {
+  const marks = game.lines();
+  const edges = el("loop").querySelectorAll("g.edge");
+  edges.forEach((edge, i) => {
+    edge.dataset.drawn = String(marks[i]);
+  });
+
+  // Which numbers are still unmet, so the met ones can fade. Taken from the rules,
+  // never counted here.
+  const unmet = new Set();
+  const pairs = Array.from(game.numbers_not_met());
+  for (let i = 0; i < pairs.length; i += 2) unmet.add(`${pairs[i]},${pairs[i + 1]}`);
+  for (const text of el("loop").querySelectorAll("text.number")) {
+    const key = `${text.dataset.column},${text.dataset.row}`;
+    text.dataset.met = unmet.has(key) ? "no" : "yes";
+  }
+
+  // What the lines add up to so far, in the core's own sentence.
+  el("shape").textContent = game.shape();
+}
+
+function tapLine(edge) {
+  const side = Number(edge.dataset.side) === Side.Across ? Side.Across : Side.Down;
+  const column = Number(edge.dataset.column);
+  const row = Number(edge.dataset.row);
+  const now = Number(edge.dataset.drawn);
+  el("note").textContent = game.draw_and_say(side, column, row, NEXT_LINE[now]);
+  refresh();
+}
+
+/** Copy the core's board onto the page. One call for the whole board, either game. */
 function refresh() {
-  const board = game.board();
-  const width = game.width();
-  for (const td of el("board").querySelectorAll("td.square")) {
-    const row = Number(td.dataset.row);
-    const column = Number(td.dataset.column);
-    td.dataset.mark = String(board[row * width + column]);
+  if (game.family() === "slitherlink") {
+    refreshLoop();
+  } else {
+    const board = game.board();
+    const width = game.width();
+    for (const td of el("board").querySelectorAll("td.square")) {
+      const row = Number(td.dataset.row);
+      const column = Number(td.dataset.column);
+      td.dataset.mark = String(board[row * width + column]);
+    }
   }
 
   const moves = game.moves_made();
@@ -337,6 +492,10 @@ function refresh() {
   // Asked of the core, every single time.
   const solved = game.is_solved();
   el("solved").hidden = !solved;
+  el("solved").textContent =
+    game.family() === "slitherlink"
+      ? "Solved. One loop, and every number met."
+      : "Solved. Every clue matches.";
 
   // "Delivered is not played." A saved puzzle stops being held only once it is
   // actually finished, which is the whole reason downloading five leaves five.
@@ -382,10 +541,25 @@ function showPuzzle(puzzle) {
   el("encoding").textContent = `one answer only, under ${puzzle.encoding()}`;
 
   game = puzzle.play();
-  drawBoard();
+  const loop = game.family() === "slitherlink";
+  el("board").hidden = loop;
+  // `toggleAttribute`, not `.hidden`. An SVG element is not an HTMLElement, so it has
+  // no `hidden` property: assigning one sets a JavaScript field that nothing reads and
+  // leaves the attribute exactly as it was. The board stayed invisible and every check
+  // that asked `.hidden` agreed with it, which is how this went unnoticed.
+  el("loop").toggleAttribute("hidden", !loop);
+  el("shape").hidden = !loop;
+  // The other game's board goes away, not just out of sight. A hidden board left in the
+  // page is a board that can be found by anything looking for one.
+  if (loop) {
+    el("board").replaceChildren();
+    drawLoopBoard();
+  } else {
+    el("loop").replaceChildren();
+    drawBoard();
+  }
   refresh();
-  el("note").textContent =
-    "Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.";
+  el("note").textContent = HOW_TO[game.family()] ?? "";
   el("game").hidden = false;
 }
 
@@ -522,6 +696,17 @@ async function main() {
     event.preventDefault();
     tap(td);
   });
+  el("loop").addEventListener("click", (event) => {
+    const edge = event.target.closest("g.edge");
+    if (edge) tapLine(edge);
+  });
+  el("loop").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const edge = event.target.closest("g.edge");
+    if (!edge) return;
+    event.preventDefault();
+    tapLine(edge);
+  });
   el("undo").addEventListener("click", () => {
     el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
     refresh();
@@ -617,6 +802,31 @@ window.gatedspark = {
     Number(
       el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`).dataset.mark
     ),
+
+  // The loop game. Same idea: a handle on what is actually on the screen, so a check
+  // written against the page reads the page rather than asking the core twice.
+  family: () => game.family(),
+  tapLine: (side, column, row) =>
+    tapLine(
+      el("loop").querySelector(
+        `g.edge[data-side="${side}"][data-column="${column}"][data-row="${row}"]`
+      )
+    ),
+  lineAt: (side, column, row) =>
+    Number(
+      el("loop").querySelector(
+        `g.edge[data-side="${side}"][data-column="${column}"][data-row="${row}"]`
+      ).dataset.drawn
+    ),
+  linesDrawn: () =>
+    el("loop").querySelectorAll('g.edge[data-drawn="0"]').length,
+  linesOnTheBoard: () => el("loop").querySelectorAll("g.edge").length,
+  numbersOnTheBoard: () => el("loop").querySelectorAll("text.number").length,
+  numbersMet: () =>
+    el("loop").querySelectorAll('text.number[data-met="yes"]').length,
+  shapeSaid: () => el("shape").textContent,
+  // Where each line is, in the order the core reports them. For laying an answer in.
+  linePlaces: () => Array.from(game.line_places()),
 };
 
 main().catch((problem) => showRefusal(`This page failed to start: ${problem.message}`));
