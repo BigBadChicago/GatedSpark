@@ -1,0 +1,29 @@
+[package]
+name = "gs-offline"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# ---------------------------------------------------------------------------
+# This crate runs on a device with no network. Read ADR 0011 before adding to it.
+# ---------------------------------------------------------------------------
+#
+# `gs-solver` and `gs-store` are absent for the reason ADR 0009 gives: both compile for
+# a browser and then fail at run time rather than at build time, so carrying either is a
+# fault nothing would report. `gs-web/tests/boundary.rs` covers this crate too, because
+# the browser depends on it.
+#
+# There is no game crate here either. The buffer holds packages as bytes and checks them
+# against a key. What family a puzzle belongs to is the page's question, not the
+# shelf's, and a buffer that knew about Nonogram would have to learn about every family
+# after it.
+[dependencies]
+gs-core = { path = "../gs-core" }
+
+[dev-dependencies]
+gs-crypto = { path = "../gs-crypto" }
+
+[lints]
+workspace = true

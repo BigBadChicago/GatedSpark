@@ -11,9 +11,15 @@
 //! unpredictably on purpose.
 //!
 //! **Not cryptographic, and never used as if it were.** Its only job is to make a
-//! seed reproduce a pattern. Signatures and content ids use
-//! [`gs_core::content::Digest`], which is a different mechanism with a different
+//! seed reproduce a sequence. Signatures and content ids use
+//! [`crate::content::Digest`], which is a different mechanism with a different
 //! strength requirement.
+//!
+//! It lives here rather than in a game crate because more than one thing needs a
+//! reproducible sequence and they must be the same sequence. Nonogram generation
+//! rebuilds a pattern from a recorded seed; the offline buffer rebuilds a player's
+//! shuffled order from one. Two copies of SplitMix64 in one workspace would be two
+//! spellings of one thing, which is how two layers come to disagree.
 
 /// A reproducible stream of numbers from a seed.
 #[derive(Debug, Clone)]

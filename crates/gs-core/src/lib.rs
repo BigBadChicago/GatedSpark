@@ -29,6 +29,7 @@ pub mod package;
 pub mod platform_suite;
 pub mod registry;
 pub mod report;
+pub mod rng;
 pub mod ruleset;
 pub mod state;
 pub mod timeline;

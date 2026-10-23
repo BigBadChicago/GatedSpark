@@ -128,6 +128,19 @@
 
   .count { color: var(--muted); font-size: .85rem; align-self: center; }
 
+  .saved {
+    margin: 1rem 0;
+    padding: .75rem .9rem;
+    border: 1px solid var(--line);
+    border-radius: .5rem;
+  }
+  .saved .controls { margin: .6rem 0 0; }
+  .saved-line { margin: 0; font-size: .85rem; color: var(--muted); }
+  button[aria-pressed="true"] {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+
   /* ---- messages ------------------------------------------------------ */
   .solved {
     margin: 1rem 0;
@@ -170,6 +183,15 @@
     <label class="count" for="pick">Puzzle</label>
     <select id="pick"></select>
   </div>
+
+  <section class="saved">
+    <p class="saved-line" id="saved-line">Checking what is saved on this device…</p>
+    <div class="controls">
+      <button id="save" type="button">Save this one for later</button>
+      <button id="play-saved" type="button">Play a saved one</button>
+      <button id="offline" type="button" aria-pressed="false">Pretend there is no signal</button>
+    </div>
+  </section>
 
   <p id="refused" class="refused" hidden></p>
 
@@ -231,6 +253,12 @@ const NEXT = {
 };
 
 let game = null;
+/** The puzzle on screen, so it can be saved or marked played. */
+let showing = null;
+/** The page's own key list, made once. The saved puzzles are checked against it too. */
+let page = null;
+/** A switch for trying the offline behaviour without unplugging anything. */
+let pretendOffline = false;
 
 function showRefusal(message) {
   el("game").hidden = true;
@@ -306,7 +334,20 @@ function refresh() {
     moves === 0 ? "No moves yet" : moves === 1 ? "1 move" : `${moves} moves`;
 
   // Asked of the core, every single time.
-  el("solved").hidden = !game.is_solved();
+  const solved = game.is_solved();
+  el("solved").hidden = !solved;
+
+  // "Delivered is not played." A saved puzzle stops being held only once it is
+  // actually finished, which is the whole reason downloading five leaves five.
+  if (solved && showing && showing.saved && !showing.counted) {
+    showing.counted = true;
+    try {
+      page.mark_played(showing.fingerprint);
+    } catch (problem) {
+      el("note").textContent = problem.message;
+    }
+    refreshSaved();
+  }
 }
 
 function tap(td) {
@@ -318,27 +359,21 @@ function tap(td) {
   refresh();
 }
 
+/** Show what is saved on this device, in the core's own words. */
+function refreshSaved() {
+  try {
+    el("saved-line").textContent = page.saved().in_words();
+  } catch (problem) {
+    // A browser in a private window refuses storage outright. That is worth saying
+    // rather than leaving a line that never updates.
+    el("saved-line").textContent = `Saving is not available here: ${problem.message}`;
+  }
+}
+
 /** Hand the bytes to the core. Everything after this is drawing. */
-function openBytes(bytes) {
-  el("refused").hidden = true;
-
-  // The page's own key. Not the puzzle's, and not something fetched alongside it.
-  const page = new Page();
-  try {
-    page.trust(TRUSTED_KEY_ID, unhex(TRUSTED_PUBLIC_KEY));
-  } catch (problem) {
-    showRefusal(`This page's key is not usable: ${problem.message}`);
-    return;
-  }
-
-  let puzzle;
-  try {
-    puzzle = page.open(bytes);
-  } catch (problem) {
-    showRefusal(problem.message);
-    return;
-  }
-
+/** Draw a puzzle the core has already accepted. Takes it on trust because `page.open`
+ *  and `page.next_saved` are the only ways to get one, and both check it. */
+function showPuzzle(puzzle) {
   el("signed-by").textContent = puzzle.signed_by();
   el("level").textContent = puzzle.band() || "none given";
   el("fingerprint").textContent = puzzle.fingerprint();
@@ -352,8 +387,28 @@ function openBytes(bytes) {
   el("game").hidden = false;
 }
 
+function openBytes(bytes) {
+  el("refused").hidden = true;
+
+  let puzzle;
+  try {
+    puzzle = page.open(bytes);
+  } catch (problem) {
+    showRefusal(problem.message);
+    return;
+  }
+  showing = { fingerprint: puzzle.fingerprint(), bytes, saved: false };
+  showPuzzle(puzzle);
+}
+
 async function open(name) {
   el("refused").hidden = true;
+  if (pretendOffline) {
+    showRefusal(
+      "There is no signal, so a new puzzle cannot be fetched. Play a saved one instead."
+    );
+    return;
+  }
   let bytes;
   try {
     // A plain file, fetched by name. A puzzle's name is its own fingerprint, which is
@@ -370,6 +425,15 @@ async function open(name) {
 
 async function main() {
   await init();
+
+  // The page's own key. Not the puzzle's, and not something fetched alongside it.
+  page = new Page();
+  try {
+    page.trust(TRUSTED_KEY_ID, unhex(TRUSTED_PUBLIC_KEY));
+  } catch (problem) {
+    showRefusal(`This page's key is not usable: ${problem.message}`);
+    return;
+  }
 
   const pick = el("pick");
   pick.replaceChildren(
@@ -403,6 +467,47 @@ async function main() {
     refresh();
   });
 
+  el("save").addEventListener("click", () => {
+    if (!showing) return;
+    try {
+      page.save_for_later(showing.bytes);
+      el("note").textContent = "Saved. It will still be here with no signal.";
+    } catch (problem) {
+      el("note").textContent = problem.message;
+    }
+    refreshSaved();
+  });
+
+  el("play-saved").addEventListener("click", () => {
+    el("refused").hidden = true;
+    let puzzle;
+    try {
+      // Checked on the way out of storage, exactly as one off the network is.
+      puzzle = page.next_saved();
+    } catch (problem) {
+      showRefusal(problem.message);
+      return;
+    }
+    // Being handed a puzzle is not having played it. The buffer still holds this one
+    // until the puzzle is actually solved, below.
+    showing = { fingerprint: puzzle.fingerprint(), bytes: null, saved: true };
+    showPuzzle(puzzle);
+    refreshSaved();
+  });
+
+  el("offline").addEventListener("click", () => {
+    pretendOffline = !pretendOffline;
+    el("offline").setAttribute("aria-pressed", String(pretendOffline));
+    el("offline").textContent = pretendOffline
+      ? "Signal is back on"
+      : "Pretend there is no signal";
+    el("note").textContent = pretendOffline
+      ? "Nothing will be fetched. Only saved puzzles will open."
+      : "";
+  });
+
+  refreshSaved();
+
   // A name in the address is how a link to one puzzle works. Otherwise the first one.
   const wanted = new URLSearchParams(location.search).get("puzzle");
   const first = wanted && PUZZLES.includes(wanted) ? wanted : PUZZLES[0];
@@ -425,6 +530,18 @@ window.gatedspark = {
   movesMade: () => game.moves_made(),
   undo: () => el("undo").click(),
   redo: () => el("redo").click(),
+  savedLine: () => el("saved-line").textContent,
+  save: () => el("save").click(),
+  playSaved: () => el("play-saved").click(),
+  toggleOffline: () => el("offline").click(),
+  fingerprint: () => el("fingerprint").textContent,
+  refusal: () =>
+    el("refused").hidden ? null : el("refused").textContent,
+  forgetEverythingSaved: () => {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("gatedspark/")) localStorage.removeItem(key);
+    }
+  },
   boardAt: (row, column) =>
     Number(
       el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`).dataset.mark

@@ -46,6 +46,8 @@ use gs_nonogram::rules::{FAMILY, RULESET_VERSION};
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod play;
+#[cfg(target_arch = "wasm32")]
+pub mod saved;
 
 /// Why a package cannot be played here.
 ///

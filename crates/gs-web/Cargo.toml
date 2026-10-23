@@ -27,6 +27,8 @@ crate-type = ["cdylib", "rlib"]
 gs-core = { path = "../gs-core" }
 gs-crypto = { path = "../gs-crypto" }
 gs-nonogram = { path = "../gs-nonogram" }
+# The offline buffer. It touches no files and no network, which is what lets it be here.
+gs-offline = { path = "../gs-offline" }
 
 # Not even as dev-dependencies. The tests here build a real signed package with a
 # scripted verifier of their own, exactly as `gs-store`'s tests do, so nothing in this
@@ -45,10 +47,19 @@ gs-nonogram = { path = "../gs-nonogram" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.129"
 
+# The browser's own storage, for the offline buffer. `web-sys` (MIT OR Apache-2.0) is
+# wasm-bindgen's own binding to the browser's interfaces; there is no second option that
+# is not a hand-written copy of it. Feature-gated down to the two interfaces used, so
+# nothing else in the browser becomes reachable by accident. ADR 0011 records the reason.
+web-sys = { version = "0.3.79", features = ["Window", "Storage"] }
+
 # The browser test harness, for the one test that cannot be run any other way. Same
 # version as above, and same reason: there is no second option.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.79"
+# The browser tests reach into `localStorage` directly, to plant an edited puzzle where
+# the buffer keeps things and prove it is refused. Same crate and features as above.
+web-sys = { version = "0.3.79", features = ["Window", "Storage"] }
 
 [lints]
 workspace = true

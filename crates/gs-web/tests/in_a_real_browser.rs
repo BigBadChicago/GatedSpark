@@ -350,3 +350,159 @@ fn taking_back_a_move_works_through_the_browser() {
     assert_eq!(game.square(0, 0), Square::Unknown);
     assert_eq!(game.moves_made(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// The offline buffer, in the storage a real browser actually has
+// ---------------------------------------------------------------------------
+//
+// `gs-offline`'s own tests run on a shelf in memory, which proves the policy. What they
+// cannot prove is that the browser's storage behaves the way the shelf interface says:
+// that bytes survive a round trip through text storage, that listing gives names back,
+// and that the whole thing works at all in a place with no filesystem. That is what
+// these do.
+
+/// Clear anything a previous test left behind.
+///
+/// `localStorage` is shared by every test in this file, and they run in one page. A
+/// test that assumed an empty device would be testing whatever ran before it.
+fn forget_everything_saved() {
+    let storage = web_sys::window()
+        .expect("a browser window")
+        .local_storage()
+        .expect("storage is allowed")
+        .expect("storage exists");
+    storage.clear().expect("clearing works");
+}
+
+#[wasm_bindgen_test]
+fn a_puzzle_saved_in_a_browser_comes_back_out_of_it() {
+    forget_everything_saved();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page = a_page_that_trusts_us();
+
+    let fingerprint = page.save_for_later(&package).expect("saved");
+    let puzzle = page.next_saved().expect("comes back");
+
+    assert_eq!(
+        puzzle.fingerprint(),
+        fingerprint,
+        "the puzzle that comes back is the puzzle that went in"
+    );
+    // And it is a real playable puzzle, not just bytes that survived.
+    assert!(puzzle.width() > 0 && puzzle.height() > 0);
+}
+
+#[wasm_bindgen_test]
+fn a_device_with_nothing_saved_says_so_rather_than_handing_over_nothing() {
+    forget_everything_saved();
+    let page = a_page_that_trusts_us();
+
+    assert!(
+        page.next_saved().is_err(),
+        "there is nothing saved, and that is an answer"
+    );
+    let saved = page.saved().expect("counted");
+    assert_eq!(saved.ready(), 0);
+    assert_eq!(saved.wanted(), 5, "and it knows how many to fetch");
+    assert!(
+        saved.in_words().contains("No puzzles saved"),
+        "in words: {}",
+        saved.in_words()
+    );
+}
+
+#[wasm_bindgen_test]
+fn being_handed_a_saved_puzzle_is_not_the_same_as_having_played_it() {
+    // The rule the buffer is shaped around, checked in the place it actually matters.
+    forget_everything_saved();
+    let page = a_page_that_trusts_us();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let fingerprint = page.save_for_later(&package).expect("saved");
+
+    let _ = page.next_saved().expect("handed over");
+    assert_eq!(
+        page.saved().expect("counted").ready(),
+        1,
+        "handing it over does not use it up"
+    );
+
+    page.mark_played(&fingerprint).expect("recorded");
+    assert_eq!(page.saved().expect("counted").ready(), 0);
+    assert!(page.next_saved().is_err());
+}
+
+#[wasm_bindgen_test]
+fn a_browser_will_not_save_a_stranger_s_puzzle() {
+    forget_everything_saved();
+    let page = a_page_that_trusts_us();
+    let theirs = a_signed_package(&SOMEBODY_ELSES_PRIVATE_KEY, "somebody-else");
+
+    assert!(page.save_for_later(&theirs).is_err());
+    assert_eq!(
+        page.saved().expect("counted").ready(),
+        0,
+        "and nothing was written"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_saved_puzzle_edited_in_the_browsers_storage_is_never_handed_over() {
+    // The check that matters most here. `localStorage` is a few clicks from being edited
+    // by hand in any browser's developer tools, so a saved puzzle is checked on the way
+    // out exactly as one off the network is.
+    forget_everything_saved();
+    let page = a_page_that_trusts_us();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let fingerprint = page.save_for_later(&package).expect("saved");
+
+    let storage = web_sys::window()
+        .expect("a window")
+        .local_storage()
+        .expect("allowed")
+        .expect("exists");
+    let key = format!("gatedspark/ahead/{fingerprint}");
+    let stored = storage.get_item(&key).expect("readable").expect("is there");
+    // Flip one byte, by changing one pair of hex digits.
+    let mut edited = stored.clone();
+    let at = edited.len() - 2;
+    edited.replace_range(at.., if stored.ends_with("00") { "01" } else { "00" });
+    assert_ne!(edited, stored, "the edit really changed something");
+    storage.set_item(&key, &edited).expect("written");
+
+    assert!(
+        page.next_saved().is_err(),
+        "an edited puzzle must not reach a player"
+    );
+    let saved = page.saved().expect("counted");
+    assert_eq!(saved.ready(), 0);
+    assert_eq!(saved.spoiled(), 1, "it is counted, not hidden");
+    assert_eq!(saved.wanted(), 5, "and a replacement is asked for");
+
+    assert_eq!(page.discard_unusable().expect("discarded"), 1);
+    assert_eq!(page.saved().expect("counted").spoiled(), 0);
+}
+
+#[wasm_bindgen_test]
+fn saved_puzzles_do_not_disturb_anything_else_the_page_keeps() {
+    forget_everything_saved();
+    let storage = web_sys::window()
+        .expect("a window")
+        .local_storage()
+        .expect("allowed")
+        .expect("exists");
+    storage.set_item("a-setting", "dark mode").expect("written");
+
+    let page = a_page_that_trusts_us();
+    let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    page.save_for_later(&package).expect("saved");
+
+    let saved = page.saved().expect("counted");
+    assert_eq!(saved.ready(), 1);
+    assert_eq!(saved.spoiled(), 0, "a setting is not a broken puzzle");
+    assert_eq!(page.discard_unusable().expect("discarded"), 0);
+    assert_eq!(
+        storage.get_item("a-setting").expect("readable").as_deref(),
+        Some("dark mode"),
+        "and it is still there"
+    );
+}
