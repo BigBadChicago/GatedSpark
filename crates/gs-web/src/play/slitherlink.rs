@@ -22,7 +22,7 @@ use gs_slitherlink::board::{DotId, EdgeId, Geometry};
 use gs_slitherlink::loops::Shape;
 use gs_slitherlink::rules::{Action, Slitherlink, LINE, NO_LINE};
 
-use super::{why, NoChange};
+use super::{why, Advice, NoChange, NoHint, PointsAt, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// Which way a line runs.
@@ -81,6 +81,8 @@ pub struct Session {
     puzzle: Playable,
     rules: Slitherlink,
     timeline: Timeline<Slitherlink>,
+    /// How many hints the player has spent on this puzzle.
+    hints_used: u8,
 }
 
 impl Session {
@@ -99,6 +101,7 @@ impl Session {
             puzzle,
             rules,
             timeline,
+            hints_used: 0,
         })
     }
 
@@ -226,6 +229,48 @@ impl Session {
             .clues_not_met(self.timeline.state())
             .filter_map(|cell| geometry.cell_at(cell))
             .collect()
+    }
+
+    /// The next line the player could work out, and why.
+    ///
+    /// Worked out here and now from the numbers in the squares and the board in front
+    /// of them, by `gs_slitherlink::hint`. There is no answer in this session to look
+    /// at, which is what lets a hint work with no signal.
+    ///
+    /// A hint that could say nothing is not charged for.
+    pub fn hint(&mut self) -> Result<Advice, NoHint> {
+        if self.hints_used >= HINTS_PER_PUZZLE {
+            return Err(NoHint::NoneLeft);
+        }
+        let found = gs_slitherlink::hint::next(
+            &self.rules,
+            self.timeline.state(),
+            gs_slitherlink::solve::Budget::default(),
+        );
+        if !found.is_something() {
+            return Err(NoHint::NothingToSay);
+        }
+        self.hints_used = self.hints_used.saturating_add(1);
+        let points_at = match found {
+            gs_slitherlink::hint::Hint::Line { at, .. }
+            | gs_slitherlink::hint::Hint::DrawnWrong { at } => PointsAt::Line {
+                across: at.across,
+                column: at.column,
+                row: at.row,
+            },
+            _ => PointsAt::Nowhere,
+        };
+        Ok(Advice {
+            says: found.plainly(),
+            points_at,
+            hints_left: self.hints_left(),
+        })
+    }
+
+    /// How many hints are left on this puzzle.
+    #[must_use]
+    pub fn hints_left(&self) -> u8 {
+        HINTS_PER_PUZZLE.saturating_sub(self.hints_used)
     }
 
     pub fn undo(&mut self) -> Result<(), NoChange> {

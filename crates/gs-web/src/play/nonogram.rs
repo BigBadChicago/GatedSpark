@@ -10,7 +10,7 @@ use gs_core::state::{Cell, State};
 use gs_core::timeline::Timeline;
 use gs_nonogram::rules::{mark_of, Action, Nonogram, EMPTY, FILLED};
 
-use super::{why, NoChange};
+use super::{why, Advice, NoChange, NoHint, PointsAt, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// What a player can do to a square.
@@ -55,6 +55,8 @@ pub struct Session {
     puzzle: Playable,
     rules: Nonogram,
     timeline: Timeline<Nonogram>,
+    /// How many hints the player has spent on this puzzle.
+    hints_used: u8,
 }
 
 impl Session {
@@ -79,6 +81,7 @@ impl Session {
             puzzle,
             rules,
             timeline,
+            hints_used: 0,
         })
     }
 
@@ -123,6 +126,47 @@ impl Session {
         }
         let index = u32::from(row) * u32::from(dims.width) + u32::from(column);
         self.mark(index, mark)
+    }
+
+    /// The next square the player could work out, and why.
+    ///
+    /// Worked out here and now from the clue numbers and the board in front of them, by
+    /// `gs_nonogram::hint`. There is no answer in this session to look at: a published
+    /// puzzle carries clues and a proof, and no board. That is what lets a hint work
+    /// with no signal.
+    ///
+    /// A hint that could say nothing is not charged for.
+    pub fn hint(&mut self) -> Result<Advice, NoHint> {
+        if self.hints_used >= HINTS_PER_PUZZLE {
+            return Err(NoHint::NoneLeft);
+        }
+        let found = gs_nonogram::hint::next(
+            &self.rules,
+            self.timeline.state(),
+            gs_nonogram::solve::Budget::default(),
+        );
+        if !found.is_something() {
+            return Err(NoHint::NothingToSay);
+        }
+        self.hints_used = self.hints_used.saturating_add(1);
+        let points_at = match found {
+            gs_nonogram::hint::Hint::Square { row, column, .. }
+            | gs_nonogram::hint::Hint::FilledWrong { row, column } => {
+                PointsAt::Square { row, column }
+            }
+            _ => PointsAt::Nowhere,
+        };
+        Ok(Advice {
+            says: found.plainly(),
+            points_at,
+            hints_left: self.hints_left(),
+        })
+    }
+
+    /// How many hints are left on this puzzle.
+    #[must_use]
+    pub fn hints_left(&self) -> u8 {
+        HINTS_PER_PUZZLE.saturating_sub(self.hints_used)
     }
 
     pub fn undo(&mut self) -> Result<(), NoChange> {

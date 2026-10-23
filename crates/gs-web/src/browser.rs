@@ -20,7 +20,7 @@ use gs_crypto::{Sha256, TrustedKeys};
 
 use crate::play::nonogram::Mark;
 use crate::play::slitherlink::{Line, Which};
-use crate::play::Session;
+use crate::play::{PointsAt, Session};
 use crate::{load, Playable};
 
 /// The page, holding the keys it will accept puzzles from.
@@ -238,6 +238,61 @@ pub struct Game {
     session: Session,
 }
 
+/// One hint, ready for a page to show and point at.
+///
+/// Flat on purpose: a page reads a sentence, a kind, and up to three numbers. Making
+/// this a tagged shape a page has to take apart would be asking the page to understand
+/// the reasoning, which is the thing it must not do.
+#[wasm_bindgen]
+pub struct Hinted {
+    says: String,
+    points_at: String,
+    row: i32,
+    column: i32,
+    side: i32,
+    hints_left: u32,
+}
+
+#[wasm_bindgen]
+impl Hinted {
+    /// What to tell the player. The game's own sentence, with the reason in it.
+    #[must_use]
+    pub fn says(&self) -> String {
+        self.says.clone()
+    }
+
+    /// What the hint points at: `"square"`, `"line"`, or `"nowhere"` for a hint about a
+    /// whole row or a whole number, where one place would be the wrong place to point.
+    #[must_use]
+    pub fn points_at(&self) -> String {
+        self.points_at.clone()
+    }
+
+    /// The row, counting from 0 at the top, or `-1` when the hint points nowhere.
+    #[must_use]
+    pub fn row(&self) -> i32 {
+        self.row
+    }
+
+    /// The column, counting from 0 at the left, or `-1` when the hint points nowhere.
+    #[must_use]
+    pub fn column(&self) -> i32 {
+        self.column
+    }
+
+    /// Which way a line runs, as a [`Side`], or `-1` when the hint is not about a line.
+    #[must_use]
+    pub fn side(&self) -> i32 {
+        self.side
+    }
+
+    /// How many hints are left on this puzzle after this one.
+    #[must_use]
+    pub fn hints_left(&self) -> u32 {
+        self.hints_left
+    }
+}
+
 #[wasm_bindgen]
 impl Game {
     /// Mark one square, by row and column.
@@ -311,6 +366,69 @@ impl Game {
                 })
             })
             .collect()
+    }
+
+    /// Ask for a hint: the next thing that can be worked out, and where it is.
+    ///
+    /// Works out nothing here. The reasoning is in the game's own crate, the allowance
+    /// is in [`Session`], and this turns the answer into something a page can read.
+    ///
+    /// A hint makes no move, so the board, the move count and whether the puzzle is
+    /// solved are all exactly as they were.
+    ///
+    /// Throws when there is no hint to give — the three are spent, or nothing could be
+    /// worked out — with the sentence to show the player. A thrown error rather than an
+    /// empty hint, because those two cases are the only ones where a page should *not*
+    /// highlight anything, and an empty hint object is the kind of thing a page forgets
+    /// to check.
+    pub fn hint(&mut self) -> Result<Hinted, JsError> {
+        match self.session.hint() {
+            Ok(advice) => {
+                let (points_at, row, column, side) = match advice.points_at {
+                    PointsAt::Square { row, column } => (
+                        "square",
+                        i32::from(row),
+                        i32::from(column),
+                        -1,
+                    ),
+                    PointsAt::Line {
+                        across,
+                        column,
+                        row,
+                    } => (
+                        "line",
+                        i32::from(row),
+                        i32::from(column),
+                        if across { Side::Across as i32 } else { Side::Down as i32 },
+                    ),
+                    PointsAt::Nowhere => ("nowhere", -1, -1, -1),
+                };
+                Ok(Hinted {
+                    says: advice.says,
+                    points_at: points_at.to_owned(),
+                    row,
+                    column,
+                    side,
+                    hints_left: u32::from(advice.hints_left),
+                })
+            }
+            Err(why) => Err(JsError::new(&why.to_string())),
+        }
+    }
+
+    /// How many hints are left on this puzzle.
+    #[must_use]
+    pub fn hints_left(&self) -> u32 {
+        u32::from(self.session.hints_left())
+    }
+
+    /// How many hints a puzzle starts with.
+    ///
+    /// Read from the core rather than written into a page, so "3 hints" in front of a
+    /// player and the number actually enforced cannot drift apart.
+    #[must_use]
+    pub fn hints_per_puzzle(&self) -> u32 {
+        u32::from(crate::play::HINTS_PER_PUZZLE)
     }
 
     /// Whether the puzzle is solved.
