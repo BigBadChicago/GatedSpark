@@ -73,7 +73,9 @@ fn every_hint_along_a_whole_game_agrees_with_the_one_answer() {
     loop {
         let hint = next(&p, &board, Budget::default());
         match hint {
-            Hint::Square { row, column, mark, .. } => {
+            Hint::Square {
+                row, column, mark, ..
+            } => {
                 assert_eq!(
                     mark == Mark::Filled,
                     answer_fills(&pattern, row, column),
@@ -131,12 +133,18 @@ fn a_square_filled_wrongly_is_pointed_at_rather_than_worked_around() {
     let dims = p.clues.dims;
     let mut board = blank(&p);
     board.set(index(dims, 0, 1), FILLED).expect("on the board");
-    assert!(!answer_fills(&pattern, 0, 1), "and that square is blank in the answer");
+    assert!(
+        !answer_fills(&pattern, 0, 1),
+        "and that square is blank in the answer"
+    );
 
     let hint = next(&p, &board, Budget::default());
     match hint {
         Hint::FilledWrong { row, column } => {
-            assert!(!answer_fills(&pattern, row, column), "that square is in the answer");
+            assert!(
+                !answer_fills(&pattern, row, column),
+                "that square is in the answer"
+            );
         }
         // A line reasoning good enough to refuse that mark outright is also a right
         // answer, and a better one. Either is correct; a square to fill is not.

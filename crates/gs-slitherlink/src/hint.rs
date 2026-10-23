@@ -85,12 +85,12 @@ impl Because {
             // Counted from 1 for a player, because that is how a person counts squares
             // on a page. The numbering inside is from 0 and stays there.
             Because::Number { column, row } => format!(
-                "the number in the square {} across and {} down",
+                "the number in the square at {} across, {} down",
                 u32::from(column) + 1,
                 u32::from(row) + 1
             ),
             Because::Dot { column, row } => format!(
-                "the dot {} across and {} down having either no lines at it or exactly two",
+                "the dot at {} across, {} down having either no lines at it or exactly two",
                 u32::from(column) + 1,
                 u32::from(row) + 1
             ),
@@ -102,7 +102,7 @@ impl Because {
 impl Where {
     fn plainly(self) -> String {
         format!(
-            "the line running {} from the dot {} across and {} down",
+            "the line running {} from the dot at {} across, {} down",
             if self.across { "right" } else { "down" },
             u32::from(self.column) + 1,
             u32::from(self.row) + 1
@@ -129,13 +129,13 @@ impl Hint {
                 because.plainly()
             ),
             Hint::NumberCannotWork { column, row } => format!(
-                "The number in the square {} across and {} down can no longer be met. \
+                "The number in the square at {} across, {} down can no longer be met. \
                  Something around it needs changing.",
                 u32::from(*column) + 1,
                 u32::from(*row) + 1
             ),
             Hint::DotCannotWork { column, row } => format!(
-                "The lines at the dot {} across and {} down cannot work: a dot has \
+                "The lines at the dot at {} across, {} down cannot work: a dot has \
                  either no lines at it or exactly two.",
                 u32::from(*column) + 1,
                 u32::from(*row) + 1
@@ -280,11 +280,7 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
 
 fn line_hint(geometry: Geometry, edge: EdgeId, drawn: bool, because: Because) -> Hint {
     match place(geometry, edge) {
-        Some(at) => Hint::Line {
-            at,
-            drawn,
-            because,
-        },
+        Some(at) => Hint::Line { at, drawn, because },
         None => Hint::NothingToSay,
     }
 }

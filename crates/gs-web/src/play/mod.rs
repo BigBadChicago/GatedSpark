@@ -102,6 +102,10 @@ pub(crate) fn why(e: TimelineError) -> NoChange {
 /// The allowance belongs to a session, so it starts again when a puzzle is opened
 /// again. That is deliberate: a hint is help, not a score, and there is nothing here
 /// worth defending with bookkeeping that follows a player around.
+///
+/// Two things are deliberately not charged for: a hint that could say nothing, and the
+/// same hint again. Asking twice without having marked anything gets the same sentence
+/// back for nothing, because nothing has changed and there is nothing new to say.
 pub const HINTS_PER_PUZZLE: u8 = 3;
 
 /// Where a hint is pointing, in the one shape a page can draw whichever game it has.
@@ -110,11 +114,7 @@ pub enum PointsAt {
     /// One square of a Nonogram, counting from 0 at the top left.
     Square { row: u16, column: u16 },
     /// One line of a Slitherlink: which way it runs, and the dot it starts from.
-    Line {
-        across: bool,
-        column: u16,
-        row: u16,
-    },
+    Line { across: bool, column: u16, row: u16 },
     /// Nowhere in particular. Said of a hint about a whole row, or a whole square's
     /// number, where highlighting one place would point at the wrong thing.
     Nowhere,

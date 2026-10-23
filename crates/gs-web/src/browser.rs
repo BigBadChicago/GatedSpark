@@ -385,12 +385,9 @@ impl Game {
         match self.session.hint() {
             Ok(advice) => {
                 let (points_at, row, column, side) = match advice.points_at {
-                    PointsAt::Square { row, column } => (
-                        "square",
-                        i32::from(row),
-                        i32::from(column),
-                        -1,
-                    ),
+                    PointsAt::Square { row, column } => {
+                        ("square", i32::from(row), i32::from(column), -1)
+                    }
                     PointsAt::Line {
                         across,
                         column,
@@ -399,7 +396,11 @@ impl Game {
                         "line",
                         i32::from(row),
                         i32::from(column),
-                        if across { Side::Across as i32 } else { Side::Down as i32 },
+                        if across {
+                            Side::Across as i32
+                        } else {
+                            Side::Down as i32
+                        },
                     ),
                     PointsAt::Nowhere => ("nowhere", -1, -1, -1),
                 };

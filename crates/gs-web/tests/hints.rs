@@ -16,7 +16,9 @@ use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::solve::Budget;
 use gs_slitherlink::generate::{propose, Shape as BoardShape, REMOVAL_BUDGET};
-use gs_web::play::{NoHint, PointsAt, Session, HINTS_PER_PUZZLE};
+use gs_web::play::nonogram::Mark;
+use gs_web::play::slitherlink::{Line, Which};
+use gs_web::play::{Advice, NoChange, NoHint, PointsAt, Session, HINTS_PER_PUZZLE};
 use gs_web::{load, Playable};
 
 const TEST_ONLY_PRIVATE_KEY: [u8; 32] = [
@@ -117,6 +119,50 @@ fn a_puzzle_starts_with_three_hints() {
     }
 }
 
+/// Do what a hint says, so the next hint is a different one.
+///
+/// Reading the sentence rather than the puzzle, because the sentence is what a player
+/// has to go on, and a hint whose words do not match where it points would be worse
+/// than no hint at all.
+fn act_on(session: &mut Session, advice: &Advice) {
+    let made = match advice.points_at {
+        PointsAt::Square { row, column } => {
+            let mark = if advice.says.contains("has to be filled") {
+                Mark::Filled
+            } else {
+                Mark::Empty
+            };
+            session
+                .as_nonogram()
+                .expect("a square belongs to a Nonogram")
+                .mark_at(row, column, mark)
+        }
+        PointsAt::Line {
+            across,
+            column,
+            row,
+        } => {
+            let line = if advice.says.contains("is part of the loop") {
+                Line::Drawn
+            } else {
+                Line::RuledOut
+            };
+            let which = if across { Which::Across } else { Which::Down };
+            session
+                .as_slitherlink()
+                .expect("a line belongs to a Slitherlink")
+                .mark(which, column, row, line)
+        }
+        // A hint about a whole row, or a whole number, which these puzzles do not get
+        // from a board nothing is wrong on.
+        PointsAt::Nowhere => Ok(()),
+    };
+    match made {
+        Ok(()) | Err(NoChange::AlreadyThatWay) => {}
+        Err(why) => panic!("a hint pointed at a move that cannot be made: {why}"),
+    }
+}
+
 #[test]
 fn three_hints_arrive_and_the_fourth_is_refused() {
     for (game, mut session) in both_games() {
@@ -134,15 +180,43 @@ fn three_hints_arrive_and_the_fourth_is_refused() {
                 "{game} hint {spent} counted wrongly"
             );
             assert_eq!(session.hints_left(), 3 - spent);
+            // Acted on, so the next hint is a new one. Asking again without marking
+            // anything gets the same sentence back, which is free; see below.
+            act_on(&mut session, &advice);
         }
         assert_eq!(
             session.hint(),
             Err(NoHint::NoneLeft),
             "{game} gave away a fourth hint"
         );
-        // And it keeps saying no, rather than coming back round.
         assert_eq!(session.hint(), Err(NoHint::NoneLeft));
         assert_eq!(session.hints_left(), 0);
+    }
+}
+
+#[test]
+fn the_same_hint_again_is_free() {
+    // A player who taps Hint twice without marking anything has not been helped twice.
+    // Charging them twice for one sentence would be sharp practice rather than help.
+    for (game, mut session) in both_games() {
+        let first = session.hint().expect("a hint on a blank board");
+        assert_eq!(first.hints_left, 2, "{game} first hint");
+        for _ in 0..5 {
+            let again = session.hint().expect("the same hint again");
+            assert_eq!(again.says, first.says, "{game} said something else");
+            assert_eq!(
+                again.hints_left, 2,
+                "{game} charged for a hint it had already given"
+            );
+        }
+        // And once the player has acted on it, the next one is a new hint and costs.
+        act_on(&mut session, &first);
+        let second = session.hint().expect("a second hint");
+        assert_ne!(
+            second.says, first.says,
+            "{game} repeated itself after a move"
+        );
+        assert_eq!(second.hints_left, 1, "{game} second hint");
     }
 }
 

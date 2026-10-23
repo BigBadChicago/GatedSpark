@@ -109,6 +109,9 @@
   td.square[data-mark="1"]::before { transform: rotate(45deg); }
   td.square[data-mark="1"]::after { transform: rotate(-45deg); }
   td.square:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+  /* The square a hint is pointing at. A ring inside the square rather than a fill,
+     because a fill is what "filled in" means here and the player has not filled it. */
+  td.square[data-hint="yes"] { outline: 3px dashed var(--accent); outline-offset: -3px; }
 
   /* ---- controls ------------------------------------------------------ */
   .controls { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0 .5rem; }
@@ -205,7 +208,21 @@
   #loop .ruled { stroke: var(--warn); stroke-width: 2.5; stroke-linecap: round; display: none; pointer-events: none; }
   #loop .edge[data-drawn="1"] .ruled { display: inline; }
   #loop .edge:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  #loop .pointer { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 3 2.5; display: none; pointer-events: none; }
+  #loop .edge[data-hint="yes"] .pointer { display: inline; }
   .shape { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+
+  /* ---- hints ---------------------------------------------------------- */
+  /* A hint gets its own line, not the status line: the status line is wiped by the next
+     thing that happens, and a hint is something a player wants to read twice. */
+  .hint-said {
+    margin: .6rem 0 0;
+    padding: .7rem .9rem;
+    border: 1px solid var(--accent);
+    border-radius: .5rem;
+    color: var(--accent);
+    font-size: .9rem;
+  }
   [hidden] { display: none !important; }
 
   /* ---- what the page checked ---------------------------------------- */
@@ -265,8 +282,13 @@
     <div class="controls">
       <button id="undo" type="button">Undo</button>
       <button id="redo" type="button">Redo</button>
+      <button id="hint" type="button">Hint</button>
+      <span class="count" id="hints-left"></span>
       <span class="count" id="moves">No moves yet</span>
     </div>
+    <!-- `role="status"` so a screen reader reads a hint out when it arrives. A hint a
+         player cannot hear is not a hint for everybody. -->
+    <p id="hint-said" class="hint-said" role="status" aria-live="polite" hidden></p>
     <p class="note" id="note">Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.</p>
 
     <section class="trust">
@@ -349,6 +371,7 @@ const RULES = {
     "A line marked 0 has no filled squares in it at all.",
     "You only have to get the filled squares right. Crossing out the blanks is a note to yourself, and nothing checks it.",
     "Tap a square once to fill it, again to cross it out, again to clear it.",
+    "Stuck? Hint names one square you can work out from here, and says which numbers make it certain. There are three for each puzzle.",
   ],
   slitherlink: [
     "Draw one single loop along the lines between the dots.",
@@ -357,6 +380,7 @@ const RULES = {
     "A square with no number in it can have any number of its sides used.",
     "Ruling a line out is a note to yourself, and nothing checks it.",
     "Tap between two dots to draw a line, again to rule it out, again to clear it.",
+    "Stuck? Hint names one line you can work out from here, and says which number or dot makes it certain. There are three for each puzzle.",
   ],
 };
 
@@ -528,6 +552,9 @@ function drawLoopBoard() {
     edge.appendChild(svg("line", { class: "line", x1, y1, x2, y2 }));
     edge.appendChild(svg("line", { class: "ruled", x1: mx - 4, y1: my - 4, x2: mx + 4, y2: my + 4 }));
     edge.appendChild(svg("line", { class: "ruled", x1: mx - 4, y1: my + 4, x2: mx + 4, y2: my - 4 }));
+    // Where a hint points. Drawn for every line and shown for at most one, because
+    // adding a node to the picture while somebody is looking at it moves the rest about.
+    edge.appendChild(svg("circle", { class: "pointer", cx: mx, cy: my, r: 8 }));
     board.appendChild(edge);
   }
 
@@ -563,12 +590,75 @@ function refreshLoop() {
 }
 
 function tapLine(edge) {
+  clearHintRing();
   const side = Number(edge.dataset.side) === Side.Across ? Side.Across : Side.Down;
   const column = Number(edge.dataset.column);
   const row = Number(edge.dataset.row);
   const now = Number(edge.dataset.drawn);
   el("note").textContent = game.draw_and_say(side, column, row, NEXT_LINE[now]);
   refresh();
+}
+
+/** Stop pointing at whatever the last hint pointed at.
+ *
+ *  The sentence stays on the screen; only the ring goes. Somebody who has just marked
+ *  the square a hint named should not still see it ringed, but they may well want to
+ *  read the reason again. */
+function clearHintRing() {
+  for (const marked of document.querySelectorAll('[data-hint="yes"]')) {
+    delete marked.dataset.hint;
+  }
+}
+
+/** How many hints are left, in the core's count rather than one kept here. */
+function refreshHintsLeft() {
+  const left = game ? game.hints_left() : 0;
+  el("hints-left").textContent =
+    left === 0 ? "No hints left" : left === 1 ? "1 hint left" : `${left} hints left`;
+  el("hint").disabled = left === 0;
+}
+
+/** Ask the core for a hint, then say it and point at it.
+ *
+ *  Everything that matters happens inside `game.hint()`: what can be worked out from
+ *  the clues, why, and whether there is any allowance left. This function shows a
+ *  sentence and puts a ring round a square. In particular it makes no move — the
+ *  marking stays the player's, which is what keeps a hint help rather than a change to
+ *  the puzzle. */
+function askForAHint() {
+  clearHintRing();
+  const said = el("hint-said");
+  let hint;
+  try {
+    hint = game.hint();
+  } catch (problem) {
+    // All three spent, or nothing left to work out. The core's own sentence.
+    said.hidden = false;
+    said.textContent = problem.message;
+    refreshHintsLeft();
+    return;
+  }
+
+  said.hidden = false;
+  said.textContent = hint.says();
+
+  // Point at it, and put the keyboard there too, so somebody playing without a mouse
+  // can act on the hint without hunting for the square it named.
+  let target = null;
+  if (hint.points_at() === "square") {
+    target = el("board").querySelector(
+      `td[data-row="${hint.row()}"][data-column="${hint.column()}"]`
+    );
+  } else if (hint.points_at() === "line") {
+    target = el("loop").querySelector(
+      `g.edge[data-side="${hint.side()}"][data-column="${hint.column()}"][data-row="${hint.row()}"]`
+    );
+  }
+  if (target) {
+    target.dataset.hint = "yes";
+    target.focus();
+  }
+  refreshHintsLeft();
 }
 
 /** Copy the core's board onto the page. One call for the whole board, either game. */
@@ -584,6 +674,8 @@ function refresh() {
       td.dataset.mark = String(board[row * width + column]);
     }
   }
+
+  refreshHintsLeft();
 
   const moves = game.moves_made();
   el("moves").textContent =
@@ -611,6 +703,7 @@ function refresh() {
 }
 
 function tap(td) {
+  clearHintRing();
   const row = Number(td.dataset.row);
   const column = Number(td.dataset.column);
   const now = Number(td.dataset.mark);
@@ -658,6 +751,10 @@ function showPuzzle(puzzle) {
     el("loop").replaceChildren();
     drawBoard();
   }
+  // A new puzzle, so a new three hints and no hint on the screen from the last one.
+  el("hint-said").hidden = true;
+  el("hint-said").textContent = "";
+  clearHintRing();
   refresh();
   showRules(game.family());
   el("note").textContent = HOW_TO[game.family()] ?? "";
@@ -930,6 +1027,7 @@ async function main() {
       /* nothing to do: the fold still works for this visit. */
     }
   });
+  el("hint").addEventListener("click", askForAHint);
   el("undo").addEventListener("click", () => {
     el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
     refresh();
@@ -1089,6 +1187,29 @@ window.gatedspark = {
   numbersMet: () =>
     el("loop").querySelectorAll('text.number[data-met="yes"]').length,
   shapeSaid: () => el("shape").textContent,
+
+  // Hints. Each one reads the page, so a check sees what a player sees rather than
+  // asking the core the same question twice.
+  hint: () => el("hint").click(),
+  hintSaid: () => (el("hint-said").hidden ? null : el("hint-said").textContent),
+  hintsLeftSaid: () => el("hints-left").textContent,
+  hintOffered: () => !el("hint").disabled,
+  hintIsAnnounced: () =>
+    el("hint-said").getAttribute("aria-live") === "polite" &&
+    el("hint-said").getAttribute("role") === "status",
+  hintedSquare: () => {
+    const td = el("board").querySelector('td.square[data-hint="yes"]');
+    return td ? [Number(td.dataset.row), Number(td.dataset.column)] : null;
+  },
+  hintedLine: () => {
+    const edge = el("loop").querySelector('g.edge[data-hint="yes"]');
+    return edge
+      ? [Number(edge.dataset.side), Number(edge.dataset.column), Number(edge.dataset.row)]
+      : null;
+  },
+  focusIsOnTheHint: () =>
+    document.activeElement instanceof Element &&
+    document.activeElement.matches('[data-hint="yes"]'),
   // Where each line is, in the order the core reports them. For laying an answer in.
   linePlaces: () => Array.from(game.line_places()),
 };

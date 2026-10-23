@@ -57,6 +57,8 @@ pub struct Session {
     timeline: Timeline<Nonogram>,
     /// How many hints the player has spent on this puzzle.
     hints_used: u8,
+    /// The last hint actually given, so that asking for the same one again is free.
+    last_hint: Option<String>,
 }
 
 impl Session {
@@ -82,6 +84,7 @@ impl Session {
             rules,
             timeline,
             hints_used: 0,
+            last_hint: None,
         })
     }
 
@@ -135,11 +138,10 @@ impl Session {
     /// puzzle carries clues and a proof, and no board. That is what lets a hint work
     /// with no signal.
     ///
-    /// A hint that could say nothing is not charged for.
+    /// A hint that could say nothing is not charged for, and neither is the same hint
+    /// again: with nothing marked since, there is nothing new to say.
     pub fn hint(&mut self) -> Result<Advice, NoHint> {
-        if self.hints_used >= HINTS_PER_PUZZLE {
-            return Err(NoHint::NoneLeft);
-        }
+        let spent = self.hints_used >= HINTS_PER_PUZZLE;
         let found = gs_nonogram::hint::next(
             &self.rules,
             self.timeline.state(),
@@ -148,7 +150,18 @@ impl Session {
         if !found.is_something() {
             return Err(NoHint::NothingToSay);
         }
-        self.hints_used = self.hints_used.saturating_add(1);
+        let says = found.plainly();
+        // The same hint again is free. Nothing has changed on the board, so there is
+        // nothing new to say, and charging a player twice for one sentence they asked
+        // to see again would be a sharp practice rather than help.
+        let again = self.last_hint.as_deref() == Some(says.as_str());
+        if spent && !again {
+            return Err(NoHint::NoneLeft);
+        }
+        if !again {
+            self.hints_used = self.hints_used.saturating_add(1);
+            self.last_hint = Some(says.clone());
+        }
         let points_at = match found {
             gs_nonogram::hint::Hint::Square { row, column, .. }
             | gs_nonogram::hint::Hint::FilledWrong { row, column } => {
@@ -157,7 +170,7 @@ impl Session {
             _ => PointsAt::Nowhere,
         };
         Ok(Advice {
-            says: found.plainly(),
+            says,
             points_at,
             hints_left: self.hints_left(),
         })

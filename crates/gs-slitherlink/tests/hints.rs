@@ -49,8 +49,7 @@ fn a_hint_on_a_blank_board_is_true_and_comes_from_a_number_or_a_dot() {
     );
     let edge = edge_of(p.geometry(), at);
     assert_eq!(
-        drawn,
-        answer[edge.0 as usize],
+        drawn, answer[edge.0 as usize],
         "the hint disagrees with the one loop at {at:?}"
     );
 }
@@ -157,7 +156,10 @@ fn a_line_drawn_wrongly_is_pointed_at_rather_than_worked_around() {
     match hint {
         Hint::DrawnWrong { at } => {
             let edge = edge_of(g, at);
-            assert!(!drawn[edge.0 as usize], "that line is in the loop after all");
+            assert!(
+                !drawn[edge.0 as usize],
+                "that line is in the loop after all"
+            );
         }
         // Local reasoning sharp enough to call it impossible outright is also right,
         // and better. What must not come back is another line to draw.
@@ -198,7 +200,11 @@ fn a_finished_board_has_nothing_left_to_say() {
     let (p, answer) = puzzle(4, 4, 1, 1, 2, 2);
     let mut state = blank(&p);
     for edge in p.geometry().edges() {
-        let value = if answer[edge.0 as usize] { LINE } else { NO_LINE };
+        let value = if answer[edge.0 as usize] {
+            LINE
+        } else {
+            NO_LINE
+        };
         state.set(edge.0, value).expect("on the board");
     }
     assert!(gs_core::ruleset::Ruleset::is_solved(&p, &state));
