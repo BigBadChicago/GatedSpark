@@ -86,6 +86,31 @@ The limit is on run length and not on board size, which is a distinction the lay
 tests hold: a twelve-column board is legal when blocks keep every run to nine or
 fewer.
 
+## Decision 5: a one-square run is written without a `+`
+
+Added 2026-10-24, when part two's encoding met a second solver.
+
+A run's total is emitted as `(= 9 (+ w_0 w_1))`, and a run of **one** square as
+`(= 5 w_0)` rather than `(= 5 (+ w_0))`.
+
+SMT-LIB2's `+` takes two or more arguments, so a unary `+` is not standard. Z3 accepts
+it regardless. CVC5 exits with an error and prints no verdict, which `gs-solver`
+reports as "nobody knows" — correctly, and the publication gate then refuses the
+puzzle. The effect was that every board with a lone white square was unverifiable, and
+so was every board one square tall or wide, since there each column is a run of one.
+
+This is the first thing the two-solver cross-check of ADR 0002 has caught. It is worth
+recording as a decision rather than a bug fix, because it is evidence about the
+arrangement rather than about this family: one solver's leniency hid a malformed query
+for as long as only that solver was asked, and a malformed query's answer is not
+evidence about a puzzle at all. The cheapest lesson available here is that the second
+solver pays for itself on encoding faults, not only on disagreements about hard
+mathematics.
+
+Held by `tests/encoding.rs::a_run_of_one_still_gets_its_total`, which now asserts the
+unary form is absent, and by the Kakuro solver-agreement job in CI, which runs every
+query past both solvers.
+
 ## Consequences
 
 * Every white square must be filled for a board to be finished. This looks stricter

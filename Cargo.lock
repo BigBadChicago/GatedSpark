@@ -218,6 +218,7 @@ name = "gs-kakuro"
 version = "0.0.1"
 dependencies = [
  "gs-core",
+ "gs-solver",
 ]
 
 [[package]]
