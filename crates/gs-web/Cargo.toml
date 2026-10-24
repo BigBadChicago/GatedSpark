@@ -28,6 +28,7 @@ gs-core = { path = "../gs-core" }
 gs-crypto = { path = "../gs-crypto" }
 gs-nonogram = { path = "../gs-nonogram" }
 gs-slitherlink = { path = "../gs-slitherlink" }
+gs-kakuro = { path = "../gs-kakuro" }
 # The offline buffer. It touches no files and no network, which is what lets it be here.
 gs-offline = { path = "../gs-offline" }
 

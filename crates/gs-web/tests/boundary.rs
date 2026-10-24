@@ -84,11 +84,18 @@ fn the_browser_contains_exactly_what_it_is_supposed_to() {
         vec![
             "gs-core".to_owned(),
             "gs-crypto".to_owned(),
+            // Added 2026-10-24, deliberately: the third game. Worth noting what it did
+            // **not** drag in with it. Kakuro's crate names `gs-solver` in its
+            // `[dev-dependencies]`, for its own agreement tests, and that is why the
+            // scanner has to tell a test-only dependency from a real one — without
+            // that distinction this line would be the one that made the boundary
+            // unholdable.
+            "gs-kakuro".to_owned(),
             "gs-nonogram".to_owned(),
             "gs-offline".to_owned(),
-            // Added 2026-10-23, deliberately: the page plays two games, so it carries
-            // two games' rules. It still carries no solver runner and no store, which
-            // is what the other half of this file is about.
+            // Added 2026-10-23, deliberately: the page plays three games now, so it
+            // carries three games' rules. It still carries no solver runner and no
+            // store, which is what the other half of this file is about.
             "gs-slitherlink".to_owned(),
             "gs-web".to_owned(),
         ],

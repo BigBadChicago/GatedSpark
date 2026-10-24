@@ -45,11 +45,15 @@
 //!   [`gs_core::verification::Outcome`], and only an `Outcome` reaches the
 //!   publication gate.
 //!
-//! Parts one and two of four are here: the board and the rules, and the SMT-LIB2
-//! encoding that lets a real solver answer the two questions this platform asks of
-//! every puzzle. Making puzzles is part three.
+//! All four parts are here. The board and the rules, the SMT-LIB2 encoding a real
+//! solver reads, the generator that makes puzzles by repairing ambiguity, and the
+//! last part: [`clues`] is the one spelling of a puzzle as bytes, [`publish`] turns a
+//! candidate into signed evidence, and [`hint`] works the next step out on the
+//! device. Playing one in a browser is `gs-web`'s half.
 
+pub mod clues;
 pub mod generate;
+pub mod hint;
 pub mod layout;
 /// The workspace's deterministic generator, which lives in the core.
 ///
@@ -57,6 +61,7 @@ pub mod layout;
 /// generation reaches for `rng::Rng`, and the seeds recorded in a validation report
 /// have to mean the same thing in every family.
 pub use gs_core::rng;
+pub mod publish;
 pub mod rules;
 pub mod smtlib;
 pub mod solve;

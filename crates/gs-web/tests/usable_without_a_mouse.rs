@@ -88,6 +88,47 @@ fn the_loop_board_can_be_reached_and_pressed_with_a_keyboard() {
     );
 }
 
+/// The same for the digit game's white squares.
+///
+/// Different from both games above in a way that matters here. A Nonogram square and a
+/// Slitherlink line are *switched* by Enter or Space; a Kakuro square takes a **value**,
+/// so the key that matters is a digit, and Enter does nothing. A player using a keyboard
+/// also has to be able to move around a board with holes in it, which neither other game
+/// has, so the arrow keys are part of the claim rather than a convenience.
+#[test]
+fn the_digit_board_can_be_reached_and_typed_into_with_a_keyboard() {
+    let page = page();
+    assert!(
+        page.contains("td.tabIndex = 0;"),
+        "the white squares are no longer in the keyboard's path, so the digit game \
+         cannot be played without a mouse"
+    );
+    let keys = body_of(&page, r#"el("kboard").addEventListener("keydown","#);
+    assert!(
+        keys.contains("typeDigit("),
+        "the white squares no longer take a typed digit: {keys}"
+    );
+    assert!(
+        keys.contains("Backspace") && keys.contains("Delete"),
+        "there is no way to empty a square from the keyboard: {keys}"
+    );
+    for arrow in ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] {
+        assert!(
+            keys.contains(arrow),
+            "{arrow} does not move between squares, so a keyboard player cannot cross \
+             a board with black squares in it: {keys}"
+        );
+    }
+    // A black square must stay out of the tab order. There is no move that changes one,
+    // so a stop there is a dead stop in the middle of a row.
+    let drawn = body_of(&page, "function drawKakuroBoard()");
+    assert!(
+        drawn.contains("td.tabIndex = 0;") && drawn.contains("role\", \"textbox\""),
+        "a white square should be announced as something that takes a value, not as a \
+         button to press: {drawn}"
+    );
+}
+
 /// Every state a square or a line can be in must have a word for it.
 ///
 /// The board shows a square's state by how it is drawn. Somebody listening to the page
@@ -113,6 +154,26 @@ fn every_state_of_a_square_and_a_line_has_a_word_for_it() {
             "a line can be {state} and the page has no word for it: {lines}"
         );
     }
+
+    // A Kakuro square has ten states rather than three, so a table of words per state
+    // would be a table of ten. What it has instead is a name built from the digit
+    // itself, which is why the check here is that the name says the digit and that an
+    // empty square and a black one are told apart in words. A board whose black squares
+    // were silent would be a board somebody listening could not find their way around.
+    let digits = body_of(&page, "function kakuroName(");
+    assert!(
+        digits.contains("empty"),
+        "an empty white square has no word for being empty: {digits}"
+    );
+    assert!(
+        digits.contains("blocked") || digits.contains("totals"),
+        "a black square says nothing about itself, so a listener cannot tell it from an \
+         empty one: {digits}"
+    );
+    assert!(
+        digits.contains("digit"),
+        "a square's name does not include the digit written in it: {digits}"
+    );
 
     // The cycle a tap walks through and the words must cover the same states. If a tap
     // can reach a state the word table does not know, that state is silent.
@@ -148,6 +209,14 @@ fn the_name_of_a_square_is_rebuilt_whenever_the_board_is() {
         loop_refresh.contains("lineName("),
         "`refreshLoop` sets how a line looks without setting what it is called: \
          {loop_refresh}"
+    );
+
+    let digit_refresh = body_of(&page, "function refreshKakuro()");
+    assert!(
+        digit_refresh.contains("kakuroName("),
+        "`refreshKakuro` writes the digit into the square without setting what the \
+         square is called, so after an undo a listener is told the old digit: \
+         {digit_refresh}"
     );
 }
 

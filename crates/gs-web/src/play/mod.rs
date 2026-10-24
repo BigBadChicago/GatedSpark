@@ -26,12 +26,17 @@
 //! [`load`](crate::load). You cannot start a session on a puzzle whose signature was not
 //! checked, because there is no other way to get the thing a session needs.
 //!
-//! # Why there are two session types and one [`Session`]
+//! # Why there are three session types and one [`Session`]
 //!
-//! A Nonogram move marks a square; a Slitherlink move marks a line between two dots.
-//! Those are not the same move wearing different words, and a single `mark(index)` for
-//! both would only have hidden which one a caller meant. So each game has its own
-//! session with its own moves.
+//! A Nonogram move marks a square; a Slitherlink move marks a line between two dots; a
+//! Kakuro move writes a digit a player chose. Those are not the same move wearing
+//! different words, and a single `mark(index)` for all three would only have hidden
+//! which one a caller meant. So each game has its own session with its own moves.
+//!
+//! Kakuro is the one that proves the point. Its move carries a **value** as well as a
+//! place, because a white square holds any of nine digits rather than being on or off.
+//! A shared `mark` would have had to grow a value argument that two of the three games
+//! ignore.
 //!
 //! What they do share is everything that is not a move: undo, redo, how many moves have
 //! been made, the board's fingerprint, and whether the puzzle is solved. [`Session`]
@@ -39,6 +44,7 @@
 //! finished message without knowing which game it has. To make a move it asks for the
 //! game it wants and gets nothing if that is not what it is holding.
 
+pub mod kakuro;
 pub mod nonogram;
 pub mod slitherlink;
 
@@ -109,8 +115,8 @@ pub const HINTS_PER_PUZZLE: u8 = 3;
 
 /// How big each hint is, in the order they are given.
 ///
-/// The hints grow: the first settles one square or line, the second half a row or
-/// column, the third a whole one. The project owner asked for exactly this, and the
+/// The hints grow: the first settles one square or line, the second half a row, column
+/// or run, the third a whole one. The project owner asked for exactly this, and the
 /// shape of it is the point — somebody a little stuck gets a nudge, and somebody
 /// thoroughly stuck gets enough to carry on with.
 ///
@@ -123,9 +129,9 @@ pub const HINT_SIZES: [HintSize; 3] = [HintSize::One, HintSize::HalfALine, HintS
 pub enum HintSize {
     /// One square, or one line.
     One,
-    /// Half a row or column.
+    /// Half a row, column or run.
     HalfALine,
-    /// A whole row or column.
+    /// A whole row, column or run.
     AWholeLine,
 }
 
@@ -150,6 +156,16 @@ pub enum Place {
     Square { row: u16, column: u16 },
     /// One line of a Slitherlink: which way it runs, and the dot it starts from.
     Line { across: bool, column: u16, row: u16 },
+    /// One white square of a Kakuro, counting from 0 at the top left.
+    ///
+    /// Its own variant rather than reusing [`Place::Square`], although the two carry
+    /// the same two numbers. They do not mean the same thing: a Nonogram's column and
+    /// row index the only squares there are, while a Kakuro's index the whole grid,
+    /// black squares included, so the same pair picks out different squares in the two
+    /// games. A page that treated them alike would draw the right highlight on the
+    /// wrong square, which is the kind of mistake that looks like a rendering glitch
+    /// and is not one.
+    Digit { column: u16, row: u16 },
 }
 
 /// A hint, after it has been marked on the board.
@@ -194,6 +210,7 @@ impl std::error::Error for NoHint {}
 pub enum Session {
     Nonogram(nonogram::Session),
     Slitherlink(slitherlink::Session),
+    Kakuro(kakuro::Session),
 }
 
 impl Session {
@@ -201,8 +218,8 @@ impl Session {
     ///
     /// There is no failure case and no default. Every game [`load`](crate::load) will
     /// hand back is a game with a session, because the list of games it accepts and the
-    /// list of games below are the same two, and the compiler holds them together: a
-    /// third game added to `KNOWN` without a session here stops this matching.
+    /// list of games below are the same three, and the compiler holds them together: a
+    /// fourth game added to `KNOWN` without a session here stops this matching.
     #[must_use]
     pub fn start(puzzle: Playable) -> Self {
         match puzzle.board {
@@ -214,6 +231,9 @@ impl Session {
                 slitherlink::Session::start(puzzle)
                     .expect("a Slitherlink board makes a Slitherlink session"),
             ),
+            crate::Board::Kakuro(_) => Session::Kakuro(
+                kakuro::Session::start(puzzle).expect("a Kakuro board makes a Kakuro session"),
+            ),
         }
     }
 
@@ -222,6 +242,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.puzzle(),
             Session::Slitherlink(game) => game.puzzle(),
+            Session::Kakuro(game) => game.puzzle(),
         }
     }
 
@@ -230,7 +251,7 @@ impl Session {
     pub fn as_nonogram(&mut self) -> Option<&mut nonogram::Session> {
         match self {
             Session::Nonogram(game) => Some(game),
-            Session::Slitherlink(_) => None,
+            _ => None,
         }
     }
 
@@ -239,7 +260,16 @@ impl Session {
     pub fn as_slitherlink(&mut self) -> Option<&mut slitherlink::Session> {
         match self {
             Session::Slitherlink(game) => Some(game),
-            Session::Nonogram(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The Kakuro being played, to write a digit in. Nothing if this is some other
+    /// game.
+    pub fn as_kakuro(&mut self) -> Option<&mut kakuro::Session> {
+        match self {
+            Session::Kakuro(game) => Some(game),
+            _ => None,
         }
     }
 
@@ -249,8 +279,8 @@ impl Session {
     /// is stored or fetched, which is why this works with no signal and why nothing
     /// published alongside a puzzle has to be kept secret.
     ///
-    /// The hints grow: one square, then half a row or column, then a whole one. See
-    /// [`HINT_SIZES`].
+    /// The hints grow: one square or line, then half a row, column or run, then a
+    /// whole one. See [`HINT_SIZES`].
     ///
     /// **The puzzle itself does not change.** A hint marks squares the clues already
     /// decide, through the ordinary rules, so every mark it makes is one the player
@@ -259,6 +289,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.hint(),
             Session::Slitherlink(game) => game.hint(),
+            Session::Kakuro(game) => game.hint(),
         }
     }
 
@@ -268,6 +299,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.hints_left(),
             Session::Slitherlink(game) => game.hints_left(),
+            Session::Kakuro(game) => game.hints_left(),
         }
     }
 
@@ -275,6 +307,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.undo(),
             Session::Slitherlink(game) => game.undo(),
+            Session::Kakuro(game) => game.undo(),
         }
     }
 
@@ -282,6 +315,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.redo(),
             Session::Slitherlink(game) => game.redo(),
+            Session::Kakuro(game) => game.redo(),
         }
     }
 
@@ -291,6 +325,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.is_solved(),
             Session::Slitherlink(game) => game.is_solved(),
+            Session::Kakuro(game) => game.is_solved(),
         }
     }
 
@@ -300,6 +335,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.moves_made(),
             Session::Slitherlink(game) => game.moves_made(),
+            Session::Kakuro(game) => game.moves_made(),
         }
     }
 
@@ -309,6 +345,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.board_fingerprint(),
             Session::Slitherlink(game) => game.board_fingerprint(),
+            Session::Kakuro(game) => game.board_fingerprint(),
         }
     }
 
@@ -318,6 +355,7 @@ impl Session {
         match self {
             Session::Nonogram(game) => game.board_bytes(),
             Session::Slitherlink(game) => game.board_bytes(),
+            Session::Kakuro(game) => game.board_bytes(),
         }
     }
 }

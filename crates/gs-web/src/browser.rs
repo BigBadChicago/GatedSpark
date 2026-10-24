@@ -247,6 +247,29 @@ pub struct Game {
 /// own copy of it.
 pub const SQUARE: i32 = 2;
 
+/// What a page marks on the screen: one white square of a Kakuro.
+///
+/// Numbered away from [`Side::Across`], [`Side::Down`] and [`SQUARE`] for the same
+/// reason they are numbered away from each other, and kept distinct from `SQUARE`
+/// although both carry a column and a row. The two do not mean the same thing: a
+/// Nonogram's pair indexes the only squares there are, while a Kakuro's indexes the
+/// whole grid with the black squares in it. A page that treated them alike would ring
+/// the wrong square.
+pub const DIGIT: i32 = 3;
+
+/// The number a page is given for a black square where a digit would be.
+///
+/// Not zero. Zero means "a white square with nothing written in it yet", which is the
+/// commonest state on the board, and a page that confused the two would draw an empty
+/// grid as a solid wall or the other way round.
+pub const BLACK: i32 = -1;
+
+/// The number a page is given for a total that is not there.
+///
+/// Most black squares head no run at all, and a run starting against the rim has no
+/// black square in front of it.
+pub const NO_TOTAL: i32 = -1;
+
 /// One hint, ready for a page to show.
 ///
 /// Flat on purpose: a sentence, and a list of numbers in threes. Making this a shape a
@@ -270,9 +293,10 @@ impl Hinted {
     /// Everywhere this hint marked, three numbers at a time: what kind of place, then
     /// its row, then its column.
     ///
-    /// The first number of each three is `2` for a square of a Nonogram, or a
-    /// [`Side`] — `0` across, `1` down — for a line of a Slitherlink, in which case the
-    /// row and column name the dot the line starts from.
+    /// The first number of each three is [`SQUARE`] for a square of a Nonogram,
+    /// [`DIGIT`] for a white square of a Kakuro, or a [`Side`] — `0` across, `1`
+    /// down — for a line of a Slitherlink, in which case the row and column name the
+    /// dot the line starts from.
     ///
     /// Empty when the hint marked nothing, which happens when it says a row cannot
     /// work: which square in it is wrong is the player's to decide.
@@ -342,7 +366,7 @@ impl Game {
     pub fn square(&self, row: u16, column: u16) -> Square {
         match &self.session {
             Session::Nonogram(game) => game.mark_at_of(row, column).into(),
-            Session::Slitherlink(_) => Square::Unknown,
+            _ => Square::Unknown,
         }
     }
 
@@ -407,6 +431,11 @@ impl Game {
                             } else {
                                 Side::Down as i32
                             });
+                            places.push(i32::from(*row));
+                            places.push(i32::from(*column));
+                        }
+                        Place::Digit { column, row } => {
+                            places.push(DIGIT);
                             places.push(i32::from(*row));
                             places.push(i32::from(*column));
                         }
@@ -587,7 +616,7 @@ impl Game {
     pub fn dots_across(&self) -> u16 {
         match &self.session {
             Session::Slitherlink(game) => game.geometry().dots_across(),
-            Session::Nonogram(_) => 0,
+            _ => 0,
         }
     }
 
@@ -596,7 +625,7 @@ impl Game {
     pub fn dots_down(&self) -> u16 {
         match &self.session {
             Session::Slitherlink(game) => game.geometry().dots_down(),
-            Session::Nonogram(_) => 0,
+            _ => 0,
         }
     }
 
@@ -657,7 +686,7 @@ impl Game {
     pub fn line(&self, side: Side, column: u16, row: u16) -> Drawn {
         match &self.session {
             Session::Slitherlink(game) => game.line_at(side.into(), column, row).into(),
-            Session::Nonogram(_) => Drawn::Unknown,
+            _ => Drawn::Unknown,
         }
     }
 
@@ -688,7 +717,7 @@ impl Game {
     pub fn number(&self, column: u16, row: u16) -> i16 {
         match &self.session {
             Session::Slitherlink(game) => game.number_at(column, row).map_or(-1, i16::from),
-            Session::Nonogram(_) => -1,
+            _ => -1,
         }
     }
 
@@ -700,7 +729,7 @@ impl Game {
     pub fn sides_drawn(&self, column: u16, row: u16) -> i16 {
         match &self.session {
             Session::Slitherlink(game) => game.sides_drawn(column, row).map_or(-1, i16::from),
-            Session::Nonogram(_) => -1,
+            _ => -1,
         }
     }
 
@@ -713,7 +742,7 @@ impl Game {
     pub fn shape(&self) -> String {
         match &self.session {
             Session::Slitherlink(game) => game.shape().plainly().to_owned(),
-            Session::Nonogram(_) => String::new(),
+            _ => String::new(),
         }
     }
 
@@ -730,5 +759,288 @@ impl Game {
             .into_iter()
             .flat_map(|(column, row)| [column, row])
             .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kakuro
+// ---------------------------------------------------------------------------
+//
+// The third game's half of the translation layer. Written as its own block for the
+// same reason the Slitherlink block is: these methods are meaningless on the other
+// games, and a page calling one on the wrong game gets a flat, drawable answer rather
+// than an exception.
+//
+// What this block had to add that neither other game needed is one thing, and it is
+// the thing the family was chosen to test: **a move carries a value.** Everything
+// else here is the same two patterns as before — one call that returns the whole board
+// for drawing, and one call per move that returns the sentence to show.
+
+#[wasm_bindgen]
+impl Game {
+    /// The board's shape, three numbers per grid square in reading order.
+    ///
+    /// For each square: whether it is black (1) or white (0), then the total of the run
+    /// going right from it, then the total of the run going down from it, with
+    /// [`NO_TOTAL`] where there is none.
+    ///
+    /// Called once, when the board is drawn. The shape of a Kakuro never changes while
+    /// it is being played — black squares are part of the puzzle, not a state a player
+    /// can reach — so a page that called this on every tap would be redrawing a wall
+    /// that cannot move.
+    ///
+    /// A run starting hard against the left or top rim has no black square in front of
+    /// it to carry its total. Those totals come back on the rim squares' own entries as
+    /// well, through [`Game::rim_totals`], because a page cannot draw a number in a
+    /// square that is not there.
+    #[must_use]
+    pub fn kakuro_shape(&self) -> Vec<i32> {
+        let Session::Kakuro(game) = &self.session else {
+            return Vec::new();
+        };
+        let layout = game.layout();
+        let mut out = Vec::with_capacity(usize::from(layout.width()) * 3);
+        for row in 0..layout.height() {
+            for column in 0..layout.width() {
+                let black = layout
+                    .square(column, row)
+                    .is_some_and(|square| layout.is_block(square));
+                out.push(i32::from(black));
+                if black {
+                    let heading = game.heading_at(column, row);
+                    out.push(heading.across.map_or(NO_TOTAL, i32::from));
+                    out.push(heading.down.map_or(NO_TOTAL, i32::from));
+                } else {
+                    out.push(NO_TOTAL);
+                    out.push(NO_TOTAL);
+                }
+            }
+        }
+        out
+    }
+
+    /// The totals of runs that start against the left or top rim, with no black square
+    /// in front of them to be written in.
+    ///
+    /// Four numbers each: the column and row of the run's first white square, then the
+    /// across total and the down total, with [`NO_TOTAL`] where there is none. A page
+    /// draws these in the margin.
+    ///
+    /// This exists because the rim is not a black square and the board's shape is not
+    /// the page's to invent. A page that drew a run's total by looking at the square
+    /// before it would silently drop every run that starts at column 0 or row 0, which
+    /// on a sparse board is most of them.
+    #[must_use]
+    pub fn rim_totals(&self) -> Vec<i32> {
+        let Session::Kakuro(game) = &self.session else {
+            return Vec::new();
+        };
+        let layout = game.layout();
+        let mut out = Vec::new();
+        for row in 0..layout.height() {
+            for column in 0..layout.width() {
+                let white = layout
+                    .square(column, row)
+                    .is_some_and(|square| layout.white_at(square).is_some());
+                if !white {
+                    continue;
+                }
+                // Only the squares on the rim: anywhere else, the square in front is
+                // either black and carries the total, or white and the run continues
+                // through it.
+                let across = if column == 0 {
+                    game.heading_for_rim(column, row, true)
+                } else {
+                    None
+                };
+                let down = if row == 0 {
+                    game.heading_for_rim(column, row, false)
+                } else {
+                    None
+                };
+                if across.is_none() && down.is_none() {
+                    continue;
+                }
+                out.push(i32::from(column));
+                out.push(i32::from(row));
+                out.push(across.map_or(NO_TOTAL, i32::from));
+                out.push(down.map_or(NO_TOTAL, i32::from));
+            }
+        }
+        out
+    }
+
+    /// Every digit on the board, one number per grid square in reading order.
+    ///
+    /// A digit from 1 to 9, `0` for a white square still empty, or [`BLACK`] for a
+    /// black one. This is the call a page makes after every move.
+    ///
+    /// One call for the whole board rather than one per square, for the reason the
+    /// Nonogram board gives: a 9 by 9 redrawn on every keystroke is 81 calls across the
+    /// boundary. It is derived fresh from the same board each time, so it cannot drift
+    /// from what [`Game::digit`] would say.
+    #[must_use]
+    pub fn digits(&self) -> Vec<i32> {
+        let Session::Kakuro(game) = &self.session else {
+            return Vec::new();
+        };
+        let layout = game.layout();
+        let mut out = Vec::with_capacity(usize::from(layout.width()));
+        for row in 0..layout.height() {
+            for column in 0..layout.width() {
+                let is_white = layout
+                    .square(column, row)
+                    .is_some_and(|square| layout.white_at(square).is_some());
+                out.push(if is_white {
+                    game.digit_at(column, row).map_or(0, i32::from)
+                } else {
+                    BLACK
+                });
+            }
+        }
+        out
+    }
+
+    /// The digit in one white square: 1 to 9, `0` for empty, [`BLACK`] for a black
+    /// square or one off the board.
+    #[must_use]
+    pub fn digit(&self, column: u16, row: u16) -> i32 {
+        let Session::Kakuro(game) = &self.session else {
+            return BLACK;
+        };
+        let layout = game.layout();
+        let is_white = layout
+            .square(column, row)
+            .is_some_and(|square| layout.white_at(square).is_some());
+        if !is_white {
+            return BLACK;
+        }
+        game.digit_at(column, row).map_or(0, i32::from)
+    }
+
+    /// Write a digit in one white square, and say what happened.
+    ///
+    /// `digit` is 1 to 9. **Zero empties the square**, which is what a page gets when a
+    /// player presses Backspace or Delete, and it goes to `clear` rather than being
+    /// written: zero is not a Kakuro digit and the rules refuse it. That translation is
+    /// here rather than in a page because "what the Delete key means" is a question
+    /// about this game, and a page should not have to know that nought is not a digit.
+    ///
+    /// The sentence is for a player to read. A refused move says why and changes
+    /// nothing.
+    pub fn write_and_say(&mut self, column: u16, row: u16, digit: i32) -> String {
+        let Some(game) = self.session.as_kakuro() else {
+            return "this is not a Kakuro".to_owned();
+        };
+        let outcome = if digit == 0 {
+            game.clear(column, row)
+        } else {
+            match i16::try_from(digit) {
+                Ok(digit) => game.write(column, row, digit),
+                // A keystroke that is not a digit at all. Refused with the same words
+                // as any other refused move: a page passes on what it read, and this
+                // is where what counts as a digit is decided.
+                Err(_) => Err(crate::play::NoChange::TheRulesRefused),
+            }
+        };
+        match outcome {
+            Ok(()) => {
+                if digit == 0 {
+                    format!(
+                        "the square at {} across, {} down has been emptied",
+                        u32::from(column) + 1,
+                        u32::from(row) + 1
+                    )
+                } else {
+                    format!(
+                        "{digit} written at {} across, {} down",
+                        u32::from(column) + 1,
+                        u32::from(row) + 1
+                    )
+                }
+            }
+            Err(why) => why.to_string(),
+        }
+    }
+
+    /// How many runs do not yet add up to their totals.
+    ///
+    /// Every run on a blank board is in this count, so it falls towards zero as the
+    /// puzzle is filled in. Not a mistake count: a run that is not yet met is the
+    /// ordinary state of a puzzle being played.
+    #[must_use]
+    pub fn runs_to_go(&self) -> usize {
+        let Session::Kakuro(game) = &self.session else {
+            return 0;
+        };
+        game.runs_not_met().len()
+    }
+
+    /// How many runs have the same digit in them twice.
+    ///
+    /// This one *is* a mistake, and it is the one Kakuro mistake a player can be shown
+    /// without being told anything they could not work out. Separate from
+    /// [`Game::runs_to_go`] so a page can say it differently.
+    #[must_use]
+    pub fn runs_with_a_repeat(&self) -> usize {
+        let Session::Kakuro(game) = &self.session else {
+            return 0;
+        };
+        game.runs_with_a_repeat().len()
+    }
+
+    /// Every white square that sits in a run holding the same digit twice, as a column
+    /// and a row each.
+    ///
+    /// A page marks these. It exists rather than letting a page work it out from a
+    /// count, because "somewhere on this board a digit repeats" is not help, and
+    /// working out which squares those are means knowing where the runs are — which is
+    /// the board's shape, and not the page's to re-derive. The core says which runs
+    /// have the fault; the page paints the squares it is given.
+    #[must_use]
+    pub fn squares_with_a_repeat(&self) -> Vec<u16> {
+        let Session::Kakuro(game) = &self.session else {
+            return Vec::new();
+        };
+        let layout = game.layout();
+        let mut out = Vec::new();
+        for id in game.runs_with_a_repeat() {
+            let Some(run) = layout.run(id) else { continue };
+            for white in &run.squares {
+                let Some((column, row)) = layout
+                    .square_of(*white)
+                    .and_then(|square| layout.square_at(square))
+                else {
+                    continue;
+                };
+                out.push(column);
+                out.push(row);
+            }
+        }
+        out
+    }
+
+    /// How the board is going, in a sentence: how many runs are still to go, and
+    /// whether any has a digit twice.
+    ///
+    /// The Kakuro answer to Slitherlink's `shape`. Both exist because each game has one
+    /// useful thing to say about a part-finished board that the other does not.
+    #[must_use]
+    pub fn how_it_is_going(&self) -> String {
+        if !matches!(&self.session, Session::Kakuro(_)) {
+            return String::new();
+        }
+        let repeats = self.runs_with_a_repeat();
+        let left = self.runs_to_go();
+        let runs = match left {
+            0 => "every run adds up".to_owned(),
+            1 => "1 run still to go".to_owned(),
+            many => format!("{many} runs still to go"),
+        };
+        match repeats {
+            0 => runs,
+            1 => format!("{runs}, and 1 run has a digit in it twice"),
+            many => format!("{runs}, and {many} runs have a digit in them twice"),
+        }
     }
 }

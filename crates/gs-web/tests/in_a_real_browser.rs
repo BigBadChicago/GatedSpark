@@ -1038,3 +1038,340 @@ fn a_withdrawn_loop_puzzle_is_refused_and_deleted_like_any_other() {
         "the package itself is still perfectly valid — it is withdrawn, not broken"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The third game, in a real browser
+// ---------------------------------------------------------------------------
+//
+// The same three claims as the loop game — it opens, it says which game it is, it can
+// be played and solved — plus the one claim only this family can make.
+//
+// **A move carries a value.** Every byte array handed across the `wasm_bindgen`
+// boundary until now has been a small set of marks. These are digits a player chose,
+// and the number that comes back for an empty square (0) is not the number that comes
+// back for a black one (-1). Getting those two the same way round is the sort of thing
+// that looks right in a native test and draws a solid wall in a browser, which is
+// exactly the kind of fault this file exists to catch — an invisible board got past
+// every automated check once already.
+
+/// A real, signed Kakuro package.
+///
+/// Five squares square, which has runs in both directions and still builds instantly.
+fn a_signed_digit_package(private_key: &[u8; 32], key_id: &str) -> Vec<u8> {
+    let candidate = gs_kakuro::generate::propose(
+        3,
+        gs_kakuro::generate::Shape::middling(5, 5),
+        gs_kakuro::solve::Budget::default(),
+    )
+    .expect("this seed makes a puzzle");
+    gs_kakuro::publish::publish(
+        &candidate,
+        &AgreesWithAUniquePuzzle {
+            asked: core::cell::RefCell::new(0),
+        },
+        gs_kakuro::solve::Budget::default(),
+        &Sha256,
+        &Ed25519Signer::new(key_id, private_key),
+    )
+    .expect("a uniquely solvable candidate with an agreeing solver publishes")
+    .package
+}
+
+/// The answer, as a column, row and digit for every white square.
+fn the_digits(package: &[u8]) -> Vec<(u16, u16, i32)> {
+    let keys = {
+        let mut k = gs_crypto::TrustedKeys::none();
+        k.trust(
+            KEY_ID,
+            &Ed25519Signer::new(KEY_ID, &TEST_ONLY_PRIVATE_KEY).public_key(),
+        )
+        .expect("valid");
+        k
+    };
+    let rules = gs_web::load(package, &Sha256, &keys)
+        .expect("loads")
+        .kakuro()
+        .expect("a Kakuro package loads as a Kakuro")
+        .clone();
+    let state = gs_kakuro::solve::solve(&rules, gs_kakuro::solve::Budget::default())
+        .witness
+        .expect("a uniquely solvable puzzle has an answer");
+    rules
+        .layout
+        .whites()
+        .filter_map(|white| {
+            let (column, row) = rules
+                .layout
+                .square_of(white)
+                .and_then(|square| rules.layout.square_at(square))?;
+            Some((column, row, i32::from(rules.digit(&state, white)?)))
+        })
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn a_digit_puzzle_opens_in_a_browser_and_says_which_game_it_is() {
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+
+    assert_eq!(puzzle.family(), "kakuro");
+    assert_eq!(puzzle.width(), 5);
+    assert_eq!(puzzle.height(), 5);
+    assert_eq!(
+        puzzle.band(),
+        "",
+        "this game has no difficulty levels yet either, and a page must not invent one"
+    );
+    assert!(
+        puzzle.encoding().contains("all-different"),
+        "the uniqueness claim names the rule it depends on: {}",
+        puzzle.encoding()
+    );
+}
+
+#[wasm_bindgen_test]
+fn the_board_a_browser_is_given_tells_black_from_empty() {
+    // The fault this test exists for. An empty white square is 0 and a black square is
+    // -1, and a page that confused the two would draw the whole grid solid or the whole
+    // grid blank. Both look like a rendering glitch and neither is one.
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    let digits = game.digits();
+    assert_eq!(
+        digits.len(),
+        25,
+        "one number per grid square, black included"
+    );
+    assert!(digits.contains(&0), "a fresh board has empty white squares");
+    assert!(digits.contains(&-1), "a middling board has black squares");
+    assert!(
+        digits.iter().all(|d| *d == 0 || *d == -1),
+        "nothing is written on a fresh board: {digits:?}"
+    );
+
+    // The shape agrees with the digits about which squares are black, which is the
+    // check that would fail if the two calls disagreed about reading order.
+    let shape = game.kakuro_shape();
+    assert_eq!(shape.len(), 25 * 3);
+    for square in 0..25 {
+        let black_per_shape = shape[square * 3] == 1;
+        let black_per_digits = digits[square] == -1;
+        assert_eq!(
+            black_per_shape, black_per_digits,
+            "square {square} is black in one call and not the other"
+        );
+    }
+}
+
+#[wasm_bindgen_test]
+fn every_run_has_its_total_somewhere_a_player_can_see_it() {
+    // A total is normally drawn in the black square in front of its run. A run starting
+    // hard against the left or top rim has no square in front of it, so its total comes
+    // back from `rim_totals` instead. A page using only one of the two calls would
+    // silently lose a run's clue, and on a sparse board that is most of them.
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let page_puzzle = a_page_that_trusts_us().open(&package).expect("opens");
+    let game = page_puzzle.play();
+
+    let shape = game.kakuro_shape();
+    let mut drawn = 0usize;
+    for square in 0..25 {
+        if shape[square * 3] != 1 {
+            continue;
+        }
+        if shape[square * 3 + 1] != -1 {
+            drawn += 1;
+        }
+        if shape[square * 3 + 2] != -1 {
+            drawn += 1;
+        }
+    }
+    let rim = game.rim_totals();
+    assert_eq!(rim.len() % 4, 0, "four numbers per rim square");
+    for i in (0..rim.len()).step_by(4) {
+        if rim[i + 2] != -1 {
+            drawn += 1;
+        }
+        if rim[i + 3] != -1 {
+            drawn += 1;
+        }
+    }
+
+    assert!(
+        rim.len() >= 4,
+        "a board this size has runs starting at the rim, or this test proves nothing"
+    );
+    assert_eq!(
+        drawn,
+        game.runs_to_go(),
+        "every run's total must be drawn exactly once: a blank board has every run \
+         still to go, so the two counts are the same number"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_digit_puzzle_can_be_played_and_solved_in_a_browser() {
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let answer = the_digits(&package);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    assert!(!game.is_solved(), "a new game is not a solved game");
+    assert_eq!(game.moves_made(), 0);
+    assert!(
+        game.how_it_is_going().contains("still to go"),
+        "{}",
+        game.how_it_is_going()
+    );
+
+    for (column, row, digit) in &answer {
+        let said = game.write_and_say(*column, *row, *digit);
+        assert!(
+            said.contains("written"),
+            "every digit of the answer can be written: {said}"
+        );
+    }
+
+    assert!(game.is_solved(), "the real answer is a solved board");
+    assert_eq!(game.runs_to_go(), 0);
+    assert_eq!(game.runs_with_a_repeat(), 0);
+    assert_eq!(game.how_it_is_going(), "every run adds up");
+
+    // And taking one digit back unsolves it, so nothing is remembering an answer.
+    assert!(game.undo());
+    assert!(!game.is_solved());
+    assert!(game.redo());
+    assert!(game.is_solved());
+}
+
+#[wasm_bindgen_test]
+fn a_browser_refuses_a_digit_that_is_not_one_and_says_so() {
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let answer = the_digits(&package);
+    let (column, row, _) = answer[0];
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    for not_a_digit in [10, 99, -5, i32::MAX, i32::MIN] {
+        let said = game.write_and_say(column, row, not_a_digit);
+        assert!(
+            !said.contains("written"),
+            "{not_a_digit} should be refused: {said}"
+        );
+    }
+    assert_eq!(game.moves_made(), 0, "a refused move is not a move");
+
+    // Zero is the one that is not a refusal: it empties the square, which is what a
+    // page gets when a player presses Backspace.
+    assert!(game.write_and_say(column, row, 4).contains("written"));
+    assert!(game.write_and_say(column, row, 0).contains("emptied"));
+    assert_eq!(game.digit(column, row), 0);
+}
+
+#[wasm_bindgen_test]
+fn a_repeat_is_pointed_at_the_squares_it_is_in() {
+    // "Somewhere on this board a digit repeats" is not help. The core names the squares
+    // of the run at fault so a page can mark them.
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+    assert!(game.squares_with_a_repeat().is_empty());
+
+    // Find two white squares in the same across run: adjacent, both white, on one row.
+    let shape = game.kakuro_shape();
+    let mut pair = None;
+    for row in 0..5u16 {
+        for column in 0..4u16 {
+            let here = usize::from(row) * 5 + usize::from(column);
+            if shape[here * 3] == 0 && shape[(here + 1) * 3] == 0 {
+                pair = Some((column, row));
+                break;
+            }
+        }
+        if pair.is_some() {
+            break;
+        }
+    }
+    let (column, row) = pair.expect("a board this size has two white squares side by side");
+
+    game.write_and_say(column, row, 4);
+    game.write_and_say(column + 1, row, 4);
+    let flagged = game.squares_with_a_repeat();
+    assert!(
+        flagged.len() >= 4,
+        "at least the two squares, as a column and a row each: {flagged:?}"
+    );
+    assert!(game.runs_with_a_repeat() >= 1);
+    assert!(
+        game.how_it_is_going().contains("twice"),
+        "{}",
+        game.how_it_is_going()
+    );
+}
+
+#[wasm_bindgen_test]
+fn three_growing_hints_arrive_for_a_digit_puzzle_too() {
+    // The hints are the platform's allowance and the family's reasoning, and this is
+    // the only place both halves are exercised inside a browser for this game.
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+    let mut game = a_page_that_trusts_us()
+        .open(&package)
+        .expect("opens")
+        .play();
+
+    assert_eq!(game.hints_left(), game.hints_per_puzzle());
+    let mut sizes = Vec::new();
+    for _ in 0..3 {
+        let hint = game.hint().expect("a hint on an unfinished board");
+        assert!(!hint.says().is_empty());
+        // Three numbers per place, and every one of them a white square of this game.
+        let places = hint.places();
+        assert_eq!(places.len() % 3, 0);
+        for i in (0..places.len()).step_by(3) {
+            assert_eq!(
+                places[i], 3,
+                "a Kakuro hint marks white squares, which the page reads as kind 3"
+            );
+        }
+        sizes.push(hint.filled());
+    }
+    assert_eq!(game.hints_left(), 0);
+    assert!(sizes[2] >= sizes[0], "the hints grow: {sizes:?}");
+    assert!(
+        game.hint().is_err(),
+        "a fourth hint is refused, with the sentence to show the player"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_digit_puzzle_saved_in_a_browser_comes_back_out_of_it() {
+    // Every test in this file that touches storage starts by emptying it. All the tests
+    // in one run share one browser, so without this line the puzzle that comes back is
+    // whatever an earlier test saved — which is how the first run of this test failed,
+    // and correctly.
+    forget_everything_saved();
+    // The offline buffer, reached through the third game. Nothing in it knows about
+    // families, and a second and third game going through it unchanged is what proves
+    // that rather than a comment saying so.
+    let page = a_page_that_trusts_us();
+    let package = a_signed_digit_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
+
+    page.save_for_later(&package)
+        .expect("a sound package saves");
+    let back = page.next_saved().expect("it comes back out");
+    assert_eq!(back.family(), "kakuro");
+
+    // Being handed it is not having played it, so it is still on offer.
+    let again = page.next_saved().expect("still on offer");
+    assert_eq!(again.fingerprint(), back.fingerprint());
+}

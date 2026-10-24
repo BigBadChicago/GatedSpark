@@ -1,4 +1,4 @@
-//! One buffer, two games, on an ordinary machine.
+//! One buffer, every game, on an ordinary machine.
 //!
 //! The browser tests cover the same ground, but only where there is a browser and a
 //! matching driver. This file runs everywhere, and it exists because of a mistake:
@@ -7,18 +7,25 @@
 //! not having played it — the buffer keeps holding it until `played` is called, which
 //! is the "delivered is not played" rule working rather than failing.
 //!
-//! So the rule is checked here, with both games, in a test that cannot be skipped for
+//! So the rule is checked here, with every game, in a test that cannot be skipped for
 //! want of a browser.
 //!
 //! What is being proved: `gs-offline` knows nothing about any game and does not need
-//! to. The packages below are a real Nonogram and a real Slitherlink, sealed and
-//! opened the way a device does it, and the buffer treats them identically.
+//! to. The packages below are a real Nonogram, a real Slitherlink and a real Kakuro,
+//! sealed and opened the way a device does it, and the buffer treats them identically.
+//!
+//! Adding the third game to this file changed the list of packages and the list of
+//! names it expects, and nothing else. That was the claim the arrangement made when it
+//! was built for two, so it is worth saying out loud that it held — including for the
+//! game whose squares hold ten states rather than three, since nothing in a buffer, a
+//! shelf, a withdrawal list or a package ever enumerated them.
 
 use gs_core::content::ContentId;
 use gs_core::verification::{Outcome, Verifier};
+use gs_core::withdrawal::{seal_list, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_offline::buffer::Buffer;
-use gs_offline::notices::Standing;
+use gs_offline::notices::{Notices, Standing};
 use gs_offline::shelf::Memory;
 
 const TEST_ONLY_PRIVATE_KEY: [u8; 32] = [
@@ -116,6 +123,24 @@ fn a_slitherlink() -> Vec<u8> {
     .package
 }
 
+fn a_kakuro() -> Vec<u8> {
+    let candidate = gs_kakuro::generate::propose(
+        3,
+        gs_kakuro::generate::Shape::middling(5, 5),
+        gs_kakuro::solve::Budget::default(),
+    )
+    .expect("this seed makes a puzzle");
+    gs_kakuro::publish::publish(
+        &candidate,
+        &AgreesWithAUniquePuzzle::new(),
+        gs_kakuro::solve::Budget::default(),
+        &Sha256,
+        &our_signer(),
+    )
+    .expect("a uniquely solvable candidate publishes")
+    .package
+}
+
 /// Which game a package in the buffer turns out to be, read the way the page reads it.
 fn family_of(package: &[u8]) -> String {
     gs_web::load(package, &Sha256, &this_device_trusts_us())
@@ -125,9 +150,9 @@ fn family_of(package: &[u8]) -> String {
 }
 
 #[test]
-fn a_device_holds_both_games_at_once_and_hands_each_one_back() {
+fn a_device_holds_every_game_at_once_and_hands_each_one_back() {
     // The thing being ruled out is a device that can hold five of one game or five of
-    // another, but not two of each.
+    // another, but not some of each.
     let buffer = Buffer::new();
     let mut shelf = Memory::new();
     let keys = this_device_trusts_us();
@@ -150,6 +175,15 @@ fn a_device_holds_both_games_at_once_and_hands_each_one_back() {
             &nothing_withdrawn(),
         )
         .expect("a real package of the other game is kept too");
+    buffer
+        .keep(
+            &mut shelf,
+            &a_kakuro(),
+            &Sha256,
+            &keys,
+            &nothing_withdrawn(),
+        )
+        .expect("and the third game, whose squares hold a digit rather than a mark");
 
     let mut found = Vec::new();
     let mut played: Vec<ContentId> = Vec::new();
@@ -161,8 +195,8 @@ fn a_device_holds_both_games_at_once_and_hands_each_one_back() {
             .expect("marking it played");
     }
     found.sort();
-    assert_eq!(found, vec!["nonogram", "slitherlink"]);
-    assert_eq!(played.len(), 2, "each one came out exactly once");
+    assert_eq!(found, vec!["kakuro", "nonogram", "slitherlink"]);
+    assert_eq!(played.len(), 3, "each one came out exactly once");
 }
 
 #[test]
@@ -240,12 +274,21 @@ fn the_buffer_never_learns_which_game_it_is_holding() {
             &nothing_withdrawn(),
         )
         .expect("kept");
+    buffer
+        .keep(
+            &mut shelf,
+            &a_kakuro(),
+            &Sha256,
+            &keys,
+            &nothing_withdrawn(),
+        )
+        .expect("kept");
 
     let stock = buffer
         .stock(&shelf, &Sha256, &keys, &nothing_withdrawn())
         .expect("reads the shelf");
     assert_eq!(
-        stock.sound, 2,
+        stock.sound, 3,
         "it counts what it holds, without sorting by game"
     );
     assert_eq!(stock.spoiled, 0);
@@ -268,4 +311,66 @@ fn the_buffer_never_learns_which_game_it_is_holding() {
             "and a game with no levels is handed over with none, not with an invented one"
         );
     }
+}
+
+#[test]
+fn a_withdrawn_kakuro_is_refused_by_the_buffer_like_any_other_puzzle() {
+    // The "do not play these" list, reached through the third game. The list names
+    // fingerprints, so nothing in it knows about families — and that is the claim: the
+    // game whose squares hold ten states is withdrawn by exactly the same machinery as
+    // the games whose squares hold three.
+    //
+    // Reached through a real signed list rather than by building a `Standing` by hand,
+    // because the point is the whole path a device takes.
+    let buffer = Buffer::new();
+    let mut shelf = Memory::new();
+    let keys = this_device_trusts_us();
+    let package = a_kakuro();
+
+    // Kept first, while nothing is withdrawn.
+    buffer
+        .keep(&mut shelf, &package, &Sha256, &keys, &nothing_withdrawn())
+        .expect("a sound package is kept");
+    let held = buffer
+        .next(&shelf, &Sha256, &keys, &nothing_withdrawn())
+        .expect("one to play");
+
+    // Now publish a list naming it, and let the device accept the list.
+    let list = WithdrawalList {
+        serial: 1,
+        withdrawn: vec![Withdrawn {
+            content_id: *held.content_id.as_bytes(),
+            reason: Reason::Unsuitable,
+        }],
+    };
+    let sealed = seal_list(&list, &Sha256, &our_signer()).expect("the list seals");
+    let notices = Notices::new();
+    notices
+        .accept(&mut shelf, &sealed, &Sha256, &keys)
+        .expect("a signed list this device trusts is accepted");
+    let standing = notices
+        .standing(&shelf, &Sha256, &keys)
+        .expect("reads the stored list");
+
+    assert_eq!(standing.len(), 1);
+    assert_eq!(
+        standing.against(&held.content_id),
+        Some(Reason::Unsuitable),
+        "the list has to name the puzzle by its fingerprint"
+    );
+
+    // And the buffer will not hand it out any more. A device that had already
+    // downloaded it stops playing it, which is the whole reason the list exists.
+    assert!(
+        buffer.next(&shelf, &Sha256, &keys, &standing).is_err(),
+        "a withdrawn puzzle must not be handed to a player"
+    );
+    // Nor accept it again, so a second download of the same puzzle does not get round
+    // the list.
+    assert!(
+        buffer
+            .keep(&mut shelf, &package, &Sha256, &keys, &standing)
+            .is_err(),
+        "a withdrawn puzzle must not be saved either"
+    );
 }

@@ -8,7 +8,8 @@
 # message appears when and only when the rules say the board is finished, and that a
 # changed puzzle is refused in words a person can read.
 #
-# Both games, from one page and one store. The loop puzzle is driven at the end.
+# Every game, from one page and one store. The loop puzzle and the digit puzzle are
+# driven at the end.
 #
 # Not in CI yet. It needs Playwright's Chromium, which is not a declared dependency of
 # this project, and adding one to run a browser is a decision worth making on purpose
@@ -47,6 +48,7 @@ fi
 # Which puzzle is which game, asked of the signed package rather than guessed from the
 # folder name. Both games are in the one store on purpose, and this check drives both.
 loop_puzzle=""
+digit_puzzle=""
 picture_puzzle=""
 for dir in "$www"/store/*/; do
   name=$(basename "$dir")
@@ -55,12 +57,18 @@ for dir in "$www"/store/*/; do
     awk '/^family / { print $2 }')
   if [ "$family" = "slitherlink" ] && [ -z "$loop_puzzle" ]; then
     loop_puzzle="$name"
+  elif [ "$family" = "kakuro" ] && [ -z "$digit_puzzle" ]; then
+    digit_puzzle="$name"
   elif [ "$family" = "nonogram" ]; then
     picture_puzzle="$name"
   fi
 done
 if [ -z "$loop_puzzle" ]; then
   echo "There is no slitherlink in the store. Run scripts/demo-web.sh first." >&2
+  exit 1
+fi
+if [ -z "$digit_puzzle" ]; then
+  echo "There is no kakuro in the store. Run scripts/demo-web.sh first." >&2
   exit 1
 fi
 
@@ -79,5 +87,5 @@ server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT
 sleep 1
 
-node "$here/scripts/drive-page.mjs" "$shots" "$www" "http://127.0.0.1:$port/" "$doomed" "$loop_puzzle"
+node "$here/scripts/drive-page.mjs" "$shots" "$www" "http://127.0.0.1:$port/" "$doomed" "$loop_puzzle" "$digit_puzzle"
 echo "==> pictures in $shots"
