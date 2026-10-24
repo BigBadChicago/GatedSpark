@@ -8,6 +8,7 @@
 mod common;
 
 use gs_core::ruleset::Ruleset;
+use gs_kakuro::construct::Weave;
 use gs_kakuro::generate::{
     batch, given_away_per_mille, propose, starting_pattern, Rejected, Shape, GENERATOR_VERSION,
 };
@@ -139,12 +140,18 @@ fn an_empty_batch_reports_nothing_rather_than_dividing_by_nothing() {
 
 #[test]
 fn the_giveaway_cap_refuses_a_board_that_hands_too_much_over() {
-    // The quality gate. A cap of nothing must refuse every board, because this method
-    // always ends up giving some squares away — which is the honest state of it, and
-    // the reason the number is in the feature vector rather than hidden.
+    // The quality gate, tested against the **random** method, which is the one it was
+    // built for. A cap of nothing must refuse every board that method makes, because it
+    // always ends up giving some squares away.
+    //
+    // Deliberately not tested against the built method, where a cap of nothing refuses
+    // nothing at all, since a built board gives nothing away. That is not the gate
+    // failing; it is the gate never firing because the thing it guards against has been
+    // fixed. The built method's version of this is
+    // `built_boards.rs::the_cap_on_giving_squares_away_is_zero_for_the_built_method`.
     let shape = Shape {
         max_given_away_per_mille: 0,
-        ..Shape::middling(5, 5)
+        ..Shape::random_pattern(5, 5)
     };
     let mut refused_for_quality = 0;
     for seed in 0..8_u64 {
@@ -181,12 +188,24 @@ fn the_feature_vector_records_what_was_given_away() {
     // `solve` on its own cannot fill this in, because only the generator knows the
     // finished layout. So the number must be put there on the way out, and this is
     // what checks it was.
-    let candidate = propose(1, Shape::middling(6, 6), Budget::default()).expect("a puzzle");
-    assert_eq!(
-        candidate.features.given_away_squares,
-        gs_kakuro::generate::given_away(&candidate.puzzle.layout),
-        "the feature vector and the layout must agree about the giveaways"
-    );
+    let mut checked = 0;
+    for seed in 0..10_u64 {
+        let Ok(candidate) = propose(seed, Shape::middling(6, 6), Budget::default()) else {
+            continue;
+        };
+        checked += 1;
+        assert_eq!(
+            candidate.features.given_away_squares,
+            gs_kakuro::generate::given_away(&candidate.puzzle.layout),
+            "seed {seed}: the feature vector and the layout must agree about the giveaways"
+        );
+        assert_eq!(
+            candidate.features.swap_rectangles,
+            gs_kakuro::construct::swap_rectangles(&candidate.puzzle.layout),
+            "seed {seed}: and about the swap rectangles"
+        );
+    }
+    assert!(checked > 0, "nothing was made, so nothing was checked");
 }
 
 #[test]
@@ -207,11 +226,15 @@ fn every_generated_puzzle_can_be_turned_into_a_query() {
 
 #[test]
 fn repair_only_ever_adds_blocks() {
-    // What the repair is allowed to do. Each round turns one white square black, so
-    // the white count must fall by exactly the number of repairs and never rise. A
-    // repair that moved a block instead would be a different and much harder thing to
-    // reason about, and this is what keeps it from drifting into one.
-    let shape = Shape::middling(6, 6);
+    // What the **random** method's repair is allowed to do. Each round turns one white
+    // square black, so the white count must fall by exactly the number of repairs and
+    // never rise. A repair that moved a block instead would be a different and much
+    // harder thing to reason about, and this is what keeps it from drifting into one.
+    //
+    // The built method has two levers rather than one, so its rounds do not count
+    // blacked-out squares; its version of this is
+    // `the_built_method_never_adds_a_white_square` below.
+    let shape = Shape::random_pattern(6, 6);
     for seed in 0..8_u64 {
         let Ok(candidate) = propose(seed, shape, Budget::default()) else {
             continue;
@@ -223,4 +246,32 @@ fn repair_only_ever_adds_blocks() {
             "seed {seed}: the white count must fall by exactly one per repair"
         );
     }
+}
+
+#[test]
+fn the_built_method_never_adds_a_white_square() {
+    // The built method's version of `repair_only_ever_adds_blocks`. Its rounds are not
+    // all blackings — most of them change a digit and leave the board alone — so the
+    // white count cannot be counted off against the rounds. What still has to hold is
+    // the direction: repair only ever takes squares away, never puts them back, because
+    // a repair that could re-whiten a square could undo the thing that made the board
+    // fair.
+    let shape = Shape::middling(6, 6);
+    let mut checked = 0;
+    for seed in 0..8_u64 {
+        let Ok(candidate) = propose(seed, shape, Budget::default()) else {
+            continue;
+        };
+        // The board it started from. Which rung of the escalation it came from is not
+        // knowable from here, and the top rung is the whitest, so this is the bound that
+        // holds whichever rung it was.
+        let started = gs_kakuro::construct::weave(6, 6, seed, Weave::middling())
+            .expect("the first rung builds");
+        checked += 1;
+        assert!(
+            candidate.puzzle.layout.white_count() <= started.white_count(),
+            "seed {seed}: ended with more white squares than the board it started from"
+        );
+    }
+    assert!(checked > 0, "nothing was made, so nothing was checked");
 }

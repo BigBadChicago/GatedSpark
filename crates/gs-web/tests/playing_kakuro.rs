@@ -69,8 +69,12 @@ fn the_page_trusts_us() -> TrustedKeys {
 /// can only be started on a puzzle whose signature was checked and the tests should use
 /// the same door.
 fn a_loaded_puzzle() -> Playable {
-    let candidate = propose(3, BoardShape::middling(5, 5), Budget::default())
-        .expect("this seed makes a puzzle");
+    // The first seed that works, not a fixed one. Which seeds produce a puzzle is a fact
+    // about the generator, and it changed when boards started being built rather than
+    // drawn at random (ADR 0021), which broke three test files at once.
+    let candidate = (0..40_u64)
+        .find_map(|seed| propose(seed, BoardShape::middling(5, 5), Budget::default()).ok())
+        .expect("some seed in forty makes a 5 by 5");
     let published = gs_kakuro::publish::publish(
         &candidate,
         &AgreesWithAUniquePuzzle {

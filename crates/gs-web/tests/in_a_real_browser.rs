@@ -1054,16 +1054,30 @@ fn a_withdrawn_loop_puzzle_is_refused_and_deleted_like_any_other() {
 // exactly the kind of fault this file exists to catch — an invisible board got past
 // every automated check once already.
 
+/// The first seed that makes a Kakuro of this size.
+///
+/// Not a fixed seed. Which seeds produce a puzzle is a fact about the generator, and it
+/// changed when boards started being built rather than drawn at random (ADR 0021), which
+/// broke three test files at once. Asking for the first seed that works keeps these tests
+/// about what they are each testing.
+fn a_kakuro_candidate(width: u16, height: u16) -> gs_kakuro::generate::Candidate {
+    (0..40_u64)
+        .find_map(|seed| {
+            gs_kakuro::generate::propose(
+                seed,
+                gs_kakuro::generate::Shape::middling(width, height),
+                gs_kakuro::solve::Budget::default(),
+            )
+            .ok()
+        })
+        .expect("some seed in forty makes a puzzle this size")
+}
+
 /// A real, signed Kakuro package.
 ///
 /// Five squares square, which has runs in both directions and still builds instantly.
 fn a_signed_digit_package(private_key: &[u8; 32], key_id: &str) -> Vec<u8> {
-    let candidate = gs_kakuro::generate::propose(
-        3,
-        gs_kakuro::generate::Shape::middling(5, 5),
-        gs_kakuro::solve::Budget::default(),
-    )
-    .expect("this seed makes a puzzle");
+    let candidate = a_kakuro_candidate(5, 5);
     gs_kakuro::publish::publish(
         &candidate,
         &AgreesWithAUniquePuzzle {

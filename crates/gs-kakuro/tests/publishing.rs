@@ -82,8 +82,13 @@ fn a_report_records_the_seed_the_ruleset_and_the_encoding() {
 
 #[test]
 fn the_report_carries_the_number_this_family_is_least_proud_of() {
-    // `given_away_squares` is in the measurements rather than left out. A number
-    // nobody can see does not get fixed, and a report is where an audit would look.
+    // `given_away_squares` is in the measurements rather than left out. A number nobody
+    // can see does not get fixed, and a report is where an audit would look.
+    //
+    // It worked: built boards hold it at zero (ADR 0021). So the list now also carries
+    // the number that fix cost, `digits_at_the_ends_per_mille`, which is this family's
+    // next one to bring down, and `swap_rectangles`, which is what its uniqueness
+    // actually turns on.
     let candidate = a_candidate();
     let verifier = Scripted::new(&[Outcome::Sat, Outcome::Unsat]);
     let report = report_for(&candidate, &verifier, Budget::default()).expect("askable");
@@ -94,7 +99,9 @@ fn the_report_carries_the_number_this_family_is_least_proud_of() {
         "single_square_runs",
         "white_squares",
         "runs",
-        "squares_turned_black_while_generating",
+        "rounds_of_repair_while_generating",
+        "swap_rectangles",
+        "digits_at_the_ends_per_mille",
     ] {
         assert!(
             named.contains(&wanted),

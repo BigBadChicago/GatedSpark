@@ -28,7 +28,8 @@
 //! Nonogram and a Slitherlink of a given size are one board each. A Kakuro is not,
 //! because where the blocks go is not implied by the size. So this is the first
 //! family whose generator has to invent a shape before it can fill one in. See
-//! [`layout`].
+//! [`layout`], and [`construct`] for how that shape is built so that the puzzle gives
+//! nothing away.
 //!
 //! # What is trusted, and what is not
 //!
@@ -52,6 +53,7 @@
 //! device. Playing one in a browser is `gs-web`'s half.
 
 pub mod clues;
+pub mod construct;
 pub mod generate;
 pub mod hint;
 pub mod layout;
