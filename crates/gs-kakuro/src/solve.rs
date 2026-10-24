@@ -678,3 +678,87 @@ impl Other<'_> {
         false
     }
 }
+
+// ---------------------------------------------------------------------------
+// Narrowing from a board a player is holding
+// ---------------------------------------------------------------------------
+
+/// Which digits each white square could still hold, given what the player has
+/// written, as bits 1 to 9 with bit 0 unused.
+///
+/// One entry per white square, in [`Layout::whites`] order. Read it with
+/// [`possible_digits`] and [`settled_digit`] rather than by picking bits out, so the
+/// bit layout stays private to this module.
+pub type Candidates = Vec<u16>;
+
+/// Narrow a board the player is holding, as far as the deductions go.
+///
+/// This is the entry point [`crate::hint`] reasons from, and it exists so that hints
+/// and the solver share **one** implementation of what follows from a total. Two
+/// copies would be two opinions about which digits are still possible, they would
+/// drift, and the one a player saw would be whichever had the bug.
+///
+/// Digits the player has already written are fixed, whether or not they are right —
+/// a hint has to reason about the board in front of the player, not about a corrected
+/// version of it. So `None` here means "what is written cannot become an answer",
+/// which is a hint worth giving rather than an error.
+///
+/// Unlike [`solve`] this never guesses. Everything it settles is forced by the
+/// totals and the no-repeats rule, which is what makes a hint built on it something
+/// the player could have worked out themselves.
+#[must_use]
+pub fn narrow_from(puzzle: &Kakuro, state: &State) -> Option<Candidates> {
+    let layout = &puzzle.layout;
+    let mut marks: Marks = Vec::with_capacity(layout.white_count());
+    for white in layout.whites() {
+        marks.push(match puzzle.digit(state, white) {
+            Some(digit) => {
+                let mask = mask_of(digit);
+                // A digit outside one to nine cannot be written through the rules, so
+                // reaching here means a state built some other way. Refused rather
+                // than ignored: pretending the square is empty would make a hint
+                // reason about a board nobody is looking at.
+                if mask == 0 {
+                    return None;
+                }
+                mask
+            }
+            None => ALL,
+        });
+    }
+    // Features are not wanted here, and `measuring: false` keeps this from counting
+    // steps into a vector nobody reads.
+    let mut thrown_away = Features::default();
+    propagate(puzzle, &mut marks, &mut thrown_away, false).ok()?;
+    Some(marks)
+}
+
+/// The digits one square could still hold, smallest first.
+pub fn possible_digits(candidates: &Candidates, white: WhiteId) -> impl Iterator<Item = i16> + '_ {
+    let mask = candidates
+        .get(usize::try_from(white.0).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or(0);
+    digits(mask)
+}
+
+/// The one digit a square must hold, if the deductions have settled it.
+#[must_use]
+pub fn settled_digit(candidates: &Candidates, white: WhiteId) -> Option<i16> {
+    let mask = candidates
+        .get(usize::try_from(white.0).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or(0);
+    only_digit(mask)
+}
+
+/// How many digits a square could still hold. Zero means the board cannot work, which
+/// [`narrow_from`] only reports when it could not prove that by propagation alone.
+#[must_use]
+pub fn how_many_possible(candidates: &Candidates, white: WhiteId) -> u32 {
+    candidates
+        .get(usize::try_from(white.0).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or(0)
+        .count_ones()
+}

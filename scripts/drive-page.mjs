@@ -23,6 +23,9 @@ const DOOMED = process.argv[5];
 // The loop puzzle, driven at the end. A different game on the same page, from the same
 // store, checked by the same key.
 const LOOP = process.argv[6];
+// The digit puzzle, driven after it. The third game on the same page, from the same
+// store, checked by the same key.
+const DIGITS = process.argv[7];
 
 /** The witness file is a canonical board: width, height, count, then one i16 per cell. */
 function filledSquares(path) {
@@ -104,6 +107,23 @@ async function layTheAnswerIn(fingerprint) {
       return null;
     }, { count, drawn });
     if (laid) await fail(laid, 'loop-witness');
+  } else if (family === 'kakuro') {
+    // One i16 per WHITE square, in white order, which is the order the page draws them
+    // in. Not one per grid square: the black squares are the board's shape and have no
+    // logical state at all, so they are not in the state vector.
+    const bytes = readFileSync(witness);
+    const count = bytes.readUInt32LE(4);
+    const digits = [];
+    for (let i = 0; i < count; i += 1) digits.push(bytes.readInt16LE(8 + i * 2));
+    const laid = await page.evaluate((want) => {
+      const whites = window.gatedspark.whiteSquaresInOrder();
+      if (whites.length !== want.length) {
+        return `the page draws ${whites.length} white squares and the answer has ${want.length}`;
+      }
+      whites.forEach(([column, row], i) => window.gatedspark.writeDigit(column, row, want[i]));
+      return null;
+    }, digits);
+    if (laid) await fail(laid, 'digit-witness');
   } else {
     const answer = filledSquares(witness);
     await page.evaluate((filled) => {
@@ -117,6 +137,29 @@ if (await page.locator('#refused').isVisible()) {
   await fail('the page refused the puzzle: ' + (await page.locator('#refused').textContent()), 'refused');
 }
 await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
+
+// A puzzle opened by itself, with nothing in the address bar. That is the schedule
+// working and it is checked here, before anything is switched, because it is the thing
+// a visitor sees.
+const arrived = await page.evaluate(() => ({
+  family: window.gatedspark.family(),
+  games: document.getElementById('game-pick').options.length,
+}));
+console.log('arrived at ' + JSON.stringify(arrived));
+if (arrived.games < 1) await fail('the page offered no games, so it has no schedule', 'no-schedule');
+
+// Everything in this section is about the picture game, so ask for the picture game
+// rather than assuming today's default is one. It stopped being one the moment a third
+// game was added: the picker is in alphabetical order, so `kakuro` now comes first and
+// this section was reading a Kakuro's board and reporting that no grid was drawn.
+if (arrived.family !== 'nonogram') {
+  await page.evaluate(() => window.gatedspark.chooseGame('nonogram'));
+  await page.waitForFunction(
+    () => window.gatedspark.boardIsShowing() && window.gatedspark.family() === 'nonogram',
+    undefined,
+    { timeout: 20000 }
+  );
+}
 
 const details = await page.evaluate(() => ({
   signedBy: document.getElementById('signed-by').textContent,
@@ -981,6 +1024,259 @@ if (!LOOP) {
 }
 
 // ---------------------------------------------------------------------------
+// The third game, on the same page
+// ---------------------------------------------------------------------------
+//
+// A Kakuro. What is being proved here that neither game above could prove: that a
+// square showing a number the player chose is drawn, that typing a digit writes it,
+// that the arrow keys move between squares, and that the black squares — which are
+// part of the puzzle rather than a state a player reached — are drawn with their
+// totals on them.
+//
+// The last one is the check this section exists for. A board whose black squares came
+// out the same colour as its white ones, or whose totals were not drawn at all, would
+// pass every test in the crate: the core would be right, the page would be wrong, and
+// the puzzle would be unplayable. An invisible board got past every automated check
+// once already, which is why this driver takes pictures.
+
+if (!DIGITS) {
+  console.log('no digit puzzle was named, so the third game was not driven');
+} else {
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.evaluate(() => window.gatedspark.forgetEverythingSaved());
+  await page.evaluate((name) => window.gatedspark.open(name), DIGITS);
+  await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
+
+  const dig = await page.evaluate(() => ({
+    family: window.gatedspark.family(),
+    level: document.getElementById('level').textContent,
+    encoding: document.getElementById('encoding').textContent,
+    // The other two games' boards must be gone, not merely hidden.
+    gridEmptied: document.querySelectorAll('td.square').length === 0,
+    loopEmptied: document.querySelectorAll('#loop g.edge').length === 0,
+    showing: window.gatedspark.kboardIsShowing(),
+    size: window.gatedspark.kboardSize(),
+    squares: window.gatedspark.kakuroSquares(),
+    white: window.gatedspark.whiteSquares(),
+    black: window.gatedspark.blackSquares(),
+    totals: window.gatedspark.totalsOnTheBoard(),
+    shape: document.getElementById('shape').textContent,
+    solved: window.gatedspark.isSolved(),
+  }));
+  console.log('digit puzzle ' + JSON.stringify(dig));
+  if (dig.family !== 'kakuro') await fail('the wrong game was opened: ' + dig.family, 'digit-wrong-game');
+  if (!dig.gridEmptied) await fail('the picture game\'s board was left on the page', 'digit-grid');
+  if (!dig.loopEmptied) await fail('the loop game\'s board was left on the page', 'digit-grid');
+  if (!dig.showing) await fail('no digit board was drawn', 'digit-empty');
+  if (dig.size < 100) await fail('the digit board is on the page but has no size: ' + dig.size, 'digit-empty');
+  if (dig.squares === 0) await fail('no squares were drawn at all', 'digit-empty');
+  if (dig.white === 0) await fail('no white squares were drawn, so there is nowhere to write', 'digit-empty');
+  if (dig.black === 0) await fail('no black squares were drawn, so the board has no shape', 'digit-empty');
+  if (dig.white + dig.black !== dig.squares) {
+    await fail('every square must be black or white: ' + JSON.stringify(dig), 'digit-empty');
+  }
+  // The clues. A Kakuro with no totals drawn is not a hard puzzle, it is a blank grid.
+  if (dig.totals === 0) await fail('no totals were drawn, so there are no clues on screen', 'digit-no-totals');
+  if (dig.level !== 'none given') await fail('this game has no levels either, and the page must not invent one', 'digit-level');
+  if (!/all-different/.test(dig.encoding)) {
+    await fail('the uniqueness claim should name the no-repeats rule: ' + dig.encoding, 'digit-encoding');
+  }
+  if (!/still to go/.test(dig.shape)) await fail('a blank board should say how much is left: ' + dig.shape, 'digit-shape');
+  if (dig.solved) await fail('it said solved before a digit was typed', 'digit-wrongly-solved');
+  await page.screenshot({ path: OUT + '/digits-blank.png', fullPage: true });
+
+  // Typing. Driven through the page's keyboard handler, because the keyboard is the
+  // thing being checked — calling the core directly would check the core twice.
+  const firstWhite = await page.evaluate(() => {
+    const td = document.querySelector('td.kcell.white');
+    return [Number(td.dataset.column), Number(td.dataset.row)];
+  });
+  const focused = await page.evaluate(
+    ([c, r]) => window.gatedspark.focusSquare(c, r),
+    firstWhite
+  );
+  if (!focused) await fail('a white square cannot take focus at all', 'digit-keyboard');
+
+  const nameBefore = await page.evaluate(() => window.gatedspark.focusedSquareName());
+  if (!/empty/.test(nameBefore)) {
+    await fail('an untouched square does not say it is empty: ' + nameBefore, 'digit-keyboard');
+  }
+  await page.keyboard.press('5');
+  const afterTyping = await page.evaluate(
+    ([c, r]) => ({
+      digit: window.gatedspark.digitAt(c, r),
+      name: window.gatedspark.squareName(c, r),
+      moves: window.gatedspark.movesMade(),
+      note: document.getElementById('note').textContent,
+    }),
+    firstWhite
+  );
+  console.log('after typing a 5 ' + JSON.stringify(afterTyping));
+  if (afterTyping.digit !== '5') await fail('typing 5 did not put a 5 in the square: ' + afterTyping.digit, 'digit-keyboard');
+  if (afterTyping.moves !== 1) await fail('typing a digit should be one move: ' + afterTyping.moves, 'digit-keyboard');
+  if (!/5/.test(afterTyping.name)) await fail('a square holding a 5 does not say so: ' + afterTyping.name, 'digit-keyboard');
+
+  // Backspace empties it, and that is a move of its own rather than an undo.
+  await page.keyboard.press('Backspace');
+  const afterBackspace = await page.evaluate(
+    ([c, r]) => ({ digit: window.gatedspark.digitAt(c, r), moves: window.gatedspark.movesMade() }),
+    firstWhite
+  );
+  console.log('after Backspace ' + JSON.stringify(afterBackspace));
+  if (afterBackspace.digit !== '') await fail('Backspace did not empty the square: ' + afterBackspace.digit, 'digit-keyboard');
+  if (afterBackspace.moves !== 2) {
+    await fail('emptying a square is a move, not a step back: ' + afterBackspace.moves, 'digit-keyboard');
+  }
+
+  // The arrow keys. They skip black squares rather than stopping on them, because
+  // there is nothing to do to a black square and landing on one is a dead stop.
+  const moved = await page.evaluate(() => {
+    const first = document.querySelector('td.kcell.white');
+    first.focus();
+    return [Number(first.dataset.column), Number(first.dataset.row)];
+  });
+  await page.keyboard.press('ArrowRight');
+  const whereNow = await page.evaluate(() => window.gatedspark.focusedSquare());
+  console.log('arrow right from ' + JSON.stringify(moved) + ' to ' + JSON.stringify(whereNow));
+  if (!whereNow) await fail('the arrow key moved the keyboard off the board', 'digit-keyboard');
+  const isWhite = await page.evaluate(
+    ([c, r]) => document.activeElement === document.querySelector(
+      `td.kcell.white[data-row="${r}"][data-column="${c}"]`
+    ),
+    whereNow
+  );
+  if (!isWhite) await fail('the arrow key landed somewhere that is not a white square', 'digit-keyboard');
+
+  // A digit twice in one run, marked on the squares it is in. "Somewhere on this board
+  // a digit repeats" would not be help.
+  const twoInARun = await page.evaluate(() => {
+    const whites = Array.from(document.querySelectorAll('td.kcell.white'));
+    for (const td of whites) {
+      const column = Number(td.dataset.column);
+      const row = Number(td.dataset.row);
+      const right = document.querySelector(
+        `td.kcell.white[data-row="${row}"][data-column="${column + 1}"]`
+      );
+      if (right) return [[column, row], [column + 1, row]];
+    }
+    return null;
+  });
+  if (twoInARun) {
+    for (const [c, r] of twoInARun) {
+      await page.evaluate(([cc, rr]) => window.gatedspark.focusSquare(cc, rr), [c, r]);
+      await page.keyboard.press('4');
+    }
+    const repeats = await page.evaluate(() => ({
+      squares: window.gatedspark.squaresWithARepeat(),
+      said: document.getElementById('shape').textContent,
+    }));
+    console.log('a digit twice in one run ' + JSON.stringify(repeats));
+    if (repeats.squares < 2) await fail('a repeated digit is not marked on the board: ' + JSON.stringify(repeats), 'digit-repeat');
+    if (!/twice/.test(repeats.said)) await fail('a repeated digit is not said out loud: ' + repeats.said, 'digit-repeat');
+    await page.screenshot({ path: OUT + '/digits-repeat.png', fullPage: true });
+    // Taken back, so the board below is clean.
+    for (let i = 0; i < twoInARun.length; i += 1) await page.evaluate(() => window.gatedspark.undo());
+  }
+
+  // A hint, which must ring the squares it filled and write digits that agree with the
+  // signed answer — which the page does not have and the hint never reads.
+  {
+    const stored = readFileSync(`${WWW}/store/${DIGITS}/witness.bin`);
+    // The witness is one i16 per WHITE square, in white order, which is the order the
+    // page reports its white squares in.
+    const answer = [];
+    const count = stored.readUInt32LE(4);
+    for (let i = 0; i < count; i += 1) answer.push(stored.readInt16LE(8 + i * 2));
+
+    const whiteOrder = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('td.kcell.white')).map((td) => [
+        Number(td.dataset.column),
+        Number(td.dataset.row),
+      ])
+    );
+    const rightDigit = new Map();
+    whiteOrder.forEach(([c, r], i) => rightDigit.set(`${c},${r}`, answer[i]));
+
+    await page.evaluate(() => window.gatedspark.hint());
+    const hinted = await page.evaluate(() => ({
+      said: window.gatedspark.hintSaid(),
+      rung: window.gatedspark.hintedDigits(),
+      left: window.gatedspark.hintsLeftSaid(),
+      announced: window.gatedspark.hintIsAnnounced(),
+    }));
+    console.log('a hint on a digit board ' + JSON.stringify(hinted));
+    if (!hinted.said) await fail('a hint said nothing', 'digit-hint');
+    if (!hinted.announced) await fail('a hint is not announced to a screen reader', 'digit-hint');
+    if (hinted.rung.length === 0) await fail('a hint rang nothing on the board', 'digit-hint');
+    for (const [c, r, shown] of hinted.rung) {
+      const right = rightDigit.get(`${c},${r}`);
+      if (String(right) !== shown) {
+        await fail(
+          `a hint wrote ${shown} at ${c},${r} and the signed answer holds ${right}`,
+          'digit-hint'
+        );
+      }
+    }
+    if (!/2 hints left/.test(hinted.left)) await fail('the hint count is wrong: ' + hinted.left, 'digit-hint');
+    await page.screenshot({ path: OUT + '/digits-hint.png', fullPage: true });
+    // Undo takes a hint back one square at a time, like any other move.
+    for (let i = 0; i < hinted.rung.length; i += 1) {
+      await page.evaluate(() => window.gatedspark.undo());
+    }
+  }
+
+  // And the whole answer laid in, which must solve it — and nothing short of it.
+  {
+    const stored = readFileSync(`${WWW}/store/${DIGITS}/witness.bin`);
+    const count = stored.readUInt32LE(4);
+    const answer = [];
+    for (let i = 0; i < count; i += 1) answer.push(stored.readInt16LE(8 + i * 2));
+    const whiteOrder = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('td.kcell.white')).map((td) => [
+        Number(td.dataset.column),
+        Number(td.dataset.row),
+      ])
+    );
+    if (whiteOrder.length !== count) {
+      await fail(
+        `the page draws ${whiteOrder.length} white squares and the answer has ${count}`,
+        'digit-answer'
+      );
+    }
+
+    for (let i = 0; i < whiteOrder.length; i += 1) {
+      const [c, r] = whiteOrder[i];
+      await page.evaluate(([cc, rr]) => window.gatedspark.focusSquare(cc, rr), [c, r]);
+      await page.keyboard.press(String(answer[i]));
+      if (i === Math.floor(whiteOrder.length / 2)) {
+        const halfway = await page.evaluate(() => window.gatedspark.isSolved());
+        if (halfway) await fail('it said solved with half the board empty', 'digit-wrongly-solved');
+        await page.screenshot({ path: OUT + '/digits-part-played.png', fullPage: true });
+      }
+    }
+
+    const done = await page.evaluate(() => ({
+      solved: window.gatedspark.isSolved(),
+      said: document.getElementById('solved').textContent,
+      shown: !document.getElementById('solved').hidden,
+      shape: document.getElementById('shape').textContent,
+      repeats: window.gatedspark.squaresWithARepeat(),
+    }));
+    console.log('digit puzzle finished ' + JSON.stringify(done));
+    if (!done.solved) await fail('the real answer did not solve it', 'digit-not-solved');
+    if (!done.shown) await fail('it is solved and the page does not say so', 'digit-not-solved');
+    if (!/adds up/.test(done.said)) await fail('the solved message is wrong for this game: ' + done.said, 'digit-not-solved');
+    if (done.repeats !== 0) await fail('a solved board has a repeat marked on it', 'digit-not-solved');
+    await page.screenshot({ path: OUT + '/digits-solved.png', fullPage: true });
+
+    // One digit taken back unsolves it, so nothing is remembering an answer.
+    await page.evaluate(() => window.gatedspark.undo());
+    const after = await page.evaluate(() => window.gatedspark.isSolved());
+    if (after) await fail('taking a digit back left it solved', 'digit-still-solved');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The schedule, driven: switching game, and downloading days ahead
 // ---------------------------------------------------------------------------
 
@@ -994,7 +1290,7 @@ await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
 // nothing typed and no name known to the page.
 const bothGames = await page.evaluate(() => window.gatedspark.games());
 console.log('games offered ' + JSON.stringify(bothGames));
-if (bothGames.length < 2) await fail('both games should be on the calendar', 'one-game');
+if (bothGames.length < 3) await fail('every game should be on the calendar: ' + JSON.stringify(bothGames), 'one-game');
 const other = bothGames[1];
 await page.evaluate((family) => window.gatedspark.chooseGame(family), other);
 // Wait for the game that was asked for, not merely for a board. Choosing a game fetches
@@ -1066,6 +1362,12 @@ if (afterSwitch.family === 'slitherlink' && !saysLoop) {
 if (afterSwitch.family === 'nonogram' && saysLoop) {
   await fail('the picture game is being given the loop game rules', 'rules');
 }
+if (afterSwitch.family === 'kakuro') {
+  const joined = rules.lines.join(' ');
+  if (saysLoop) await fail('the digit game is being given the loop game rules', 'rules');
+  if (!/run/.test(joined)) await fail('the digit game is not told what a run is: ' + joined, 'rules');
+  if (!/add up/.test(joined)) await fail('the digit game is not told the digits have to add up', 'rules');
+}
 if (!rules.title.toLowerCase().includes(afterSwitch.family)) {
   await fail(`the rules are titled "${rules.title}" while a ${afterSwitch.family} is on screen`, 'rules');
 }
@@ -1100,7 +1402,7 @@ const ahead = await page.evaluate(() => {
 console.log('days after the first day of the calendar ' + JSON.stringify(ahead));
 if (ahead.length === 0) await fail('the calendar should have days after its own first day', 'to-download');
 
-console.log('console problems after both games ' + JSON.stringify(problems));
+console.log('console problems after every game ' + JSON.stringify(problems));
 await browser.close();
 if (problems.length) { console.log('FAIL: the browser reported errors'); process.exit(1); }
 console.log('OK');

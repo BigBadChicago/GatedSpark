@@ -31,14 +31,22 @@ cargo run --quiet -p gs-cli -- fill \
     --key "$key" \
     --count "$count"
 
-# Both games into the one store, because that is the point: one store, one page, one
-# key, two games. A page that needed a separate store per game would have needed a
+# Every game into the one store, because that is the point: one store, one page, one
+# key, three games. A page that needed a separate store per game would have needed a
 # separate everything per game.
 echo "==> making $count slitherlinks, 6 squares square"
 cargo run --quiet --release -p gs-cli -- fill \
     --store "$www/store" \
     --key "$key" \
     --family slitherlink \
+    --size 6 \
+    --count "$count"
+
+echo "==> making $count kakuros, 6 squares square"
+cargo run --quiet --release -p gs-cli -- fill \
+    --store "$www/store" \
+    --key "$key" \
+    --family kakuro \
     --size 6 \
     --count "$count"
 

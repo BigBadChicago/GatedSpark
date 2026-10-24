@@ -37,6 +37,9 @@ use gs_core::package::{RecordedReplay, Signer};
 use gs_core::schedule::{seal_schedule, Date, OpenedSchedule, Schedule, Scheduled};
 use gs_core::withdrawal::{seal_list, OpenedList, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
+use gs_kakuro::generate as ka_generate;
+use gs_kakuro::publish as ka_publish;
+use gs_kakuro::solve as ka_solve;
 use gs_nonogram::difficulty::{propose_in_band, Band, BANDS};
 use gs_nonogram::publish::{publish, PublishError};
 use gs_nonogram::solve::{solve, Budget};
@@ -58,7 +61,7 @@ gatedspark — make and keep verified puzzles
       Generate puzzles, ask a real solver about each one, and store the ones it
       vouches for. Nothing is signed that the solver did not vouch for.
 
-      --family NAME  which game: nonogram (the default) or slitherlink
+      --family NAME  which game: nonogram (the default), slitherlink or kakuro
 
       Nonogram only:
       --level NAME   one difficulty level, instead of all of them
@@ -68,6 +71,17 @@ gatedspark — make and keep verified puzzles
       --enclosed N   how much of the board the loop should go round, in tenths of
                      a percent. Defaults to 400. This game has no difficulty
                      levels yet, on purpose: they wait for measured play data.
+
+      Kakuro only:
+      --size N       board size, N by N squares. Defaults to 7.
+      --black N      how much of the board starts black, in tenths of a percent.
+                     Defaults to 200. More black squares are added after that,
+                     one at a time, until the puzzle has a single answer.
+      --given N      the most white squares that may sit alone in a run of one,
+                     in tenths of a percent. Defaults to 500. A square alone in
+                     a run has its digit named by the total, so this is a cap on
+                     how much of the board is handed to the player. This game has
+                     no difficulty levels yet either, and for the same reason.
 
   gatedspark show    --store <dir> <puzzle name>
       Print one puzzle's validation report, read out of its signed package.
@@ -300,6 +314,8 @@ fn fill(args: &[String]) -> Result<(), String> {
         "from-seed",
         "max-seeds",
         "timeout",
+        "black",
+        "given",
     ])?;
 
     let store = Store::open(args.required("store")?).map_err(|e| e.to_string())?;
@@ -321,9 +337,9 @@ fn fill(args: &[String]) -> Result<(), String> {
     let mut bands: Vec<&'static Band> = Vec::new();
     match family {
         "nonogram" => {
-            for flag in ["size", "enclosed"] {
+            for flag in ["size", "enclosed", "black", "given"] {
                 if args.get(flag).is_some() {
-                    return Err(format!("--{flag} is for slitherlink, not nonogram"));
+                    return Err(format!("--{flag} is not a nonogram flag"));
                 }
             }
             bands = chosen_bands(args.get("level"))?;
@@ -336,10 +352,28 @@ fn fill(args: &[String]) -> Result<(), String> {
                         .to_owned(),
                 );
             }
+            for flag in ["black", "given"] {
+                if args.get(flag).is_some() {
+                    return Err(format!("--{flag} is for kakuro, not slitherlink"));
+                }
+            }
+        }
+        "kakuro" => {
+            if args.get("level").is_some() {
+                return Err(
+                    "--level is for nonogram. Kakuro has no difficulty levels yet, on \
+                     purpose, and it has a particular reason to wait: the number most \
+                     likely to move is how much of the board it gives away."
+                        .to_owned(),
+                );
+            }
+            if args.get("enclosed").is_some() {
+                return Err("--enclosed is for slitherlink, not kakuro".to_owned());
+            }
         }
         other => {
             return Err(format!(
-                "no such game: {other}\ngames: nonogram, slitherlink"
+                "no such game: {other}\ngames: nonogram, slitherlink, kakuro"
             ))
         }
     }
@@ -361,6 +395,24 @@ fn fill(args: &[String]) -> Result<(), String> {
     println!("game:   {family}");
     println!("solver: {program}, {seconds}s limit per query");
     println!("store:  {}", store.root().display());
+
+    if family == "kakuro" {
+        let shape = ka_generate::Shape {
+            width: args.number("size", 7u16)?,
+            height: args.number("size", 7u16)?,
+            block_per_mille: args.number("black", 200u16)?,
+            max_given_away_per_mille: args.number("given", 500u32)?,
+        };
+        return fill_kakuro(
+            &store,
+            &signer,
+            &trusted,
+            &solver,
+            shape,
+            wanted,
+            from_seed..from_seed.saturating_add(max_seeds),
+        );
+    }
 
     if family == "slitherlink" {
         let shape = Shape {
@@ -452,6 +504,110 @@ fn fill(args: &[String]) -> Result<(), String> {
     }
     if stored == 0 {
         return Err("nothing was stored".to_owned());
+    }
+    Ok(())
+}
+
+/// Fill the store with Kakuro puzzles.
+///
+/// The same shape as both loops below and above it — generate, ask a real solver,
+/// store only what the solver vouched for — with one line that is this game's own:
+/// the number of squares it gave away is printed for every puzzle stored. That is
+/// the measurement this family is least proud of, and a run that printed only the
+/// cheerful numbers would be a run nobody fixed it from.
+fn fill_kakuro(
+    store: &Store,
+    signer: &Ed25519Signer,
+    trusted: &TrustedKeys,
+    solver: &ExternalSolver,
+    shape: ka_generate::Shape,
+    wanted: usize,
+    seeds: std::ops::Range<u64>,
+) -> Result<(), String> {
+    println!(
+        "board:  {}x{} squares, {}/1000 black to start, at most {}/1000 given away",
+        shape.width, shape.height, shape.block_per_mille, shape.max_given_away_per_mille
+    );
+    println!();
+
+    let mut stored = 0usize;
+    let mut rejected = 0usize;
+    let mut refused = 0usize;
+    let mut undecided = 0usize;
+    let mut seed = seeds.start;
+
+    while stored < wanted && seed < seeds.end {
+        let this_seed = seed;
+        seed += 1;
+        let candidate = match ka_generate::propose(this_seed, shape, ka_solve::Budget::default()) {
+            Ok(c) => c,
+            // A size this family cannot lay out is a bad flag, not a bad seed, and no
+            // later seed will fix it. Everything else is this seed's luck.
+            Err(ka_generate::Rejected::Unlayoutable(e)) => {
+                return Err(format!("--size is not a board this game can make: {e:?}"))
+            }
+            Err(_) => {
+                rejected += 1;
+                continue;
+            }
+        };
+        match ka_publish::publish(
+            &candidate,
+            solver,
+            ka_solve::Budget::default(),
+            &Sha256,
+            signer,
+        ) {
+            Ok(published) => {
+                let witness =
+                    match ka_solve::solve(&candidate.puzzle, ka_solve::Budget::default()).witness {
+                        Some(w) => w.canonical_bytes(),
+                        // A published puzzle has a replayed witness by definition, so
+                        // this cannot happen without a bug. Reported rather than
+                        // unwrapped: a batch run should not die on one puzzle.
+                        None => {
+                            eprintln!("  seed {this_seed}: published but has no witness; skipped");
+                            continue;
+                        }
+                    };
+                match store.put(&published.package, &witness, &Sha256, trusted) {
+                    Ok(id) => {
+                        stored += 1;
+                        println!(
+                            "  {} seed {this_seed}, {} white squares, {} turned black, \
+                             {}/1000 given away",
+                            id.to_hex(),
+                            candidate.puzzle.layout.white_count(),
+                            candidate.repairs,
+                            ka_generate::given_away_per_mille(&candidate.puzzle.layout)
+                        );
+                    }
+                    // Two seeds can produce the same board. Not an error.
+                    Err(gs_store::StoreError::AlreadyStored(_)) => continue,
+                    Err(e) => return Err(format!("storing seed {this_seed}: {e}")),
+                }
+            }
+            Err(ka_publish::PublishError::Refused { report, .. }) => {
+                if report.has_undecided_query() {
+                    undecided += 1;
+                } else {
+                    refused += 1;
+                }
+            }
+            Err(ka_publish::PublishError::Unaskable(_)) => refused += 1,
+            Err(ka_publish::PublishError::Encoding(e)) => {
+                return Err(format!("encoding seed {this_seed}: {e:?}"))
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "stored {stored}, dropped while generating {rejected}, \
+         refused by the solver {refused}, undecided {undecided}"
+    );
+    if stored < wanted {
+        println!("wanted {wanted} — short by {}", wanted - stored);
     }
     Ok(())
 }

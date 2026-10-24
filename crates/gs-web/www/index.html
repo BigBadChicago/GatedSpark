@@ -113,6 +113,86 @@
      because a fill is what "filled in" means here and the player has not filled it. */
   td.square[data-hint="yes"] { outline: 3px dashed var(--accent); outline-offset: -3px; }
 
+  /* ---- the Kakuro board ---------------------------------------------
+     Its own table, not the Nonogram one with different classes on it. Two reasons.
+     The grid carries black squares that are part of the puzzle rather than a state a
+     player reached, so there is nothing for a tap to do to them; and a white square
+     shows a digit the player chose, so it holds text rather than a fill. Trying to
+     make one table do both would have meant a square whose meaning depended on which
+     game was loaded, which is the mistake `Place::Digit` exists to avoid on the other
+     side of the boundary. */
+  table.kboard { border-collapse: collapse; margin: 0 auto; }
+  table.kboard th, table.kboard td { padding: 0; }
+  /* The totals for runs that start against the rim, drawn in the margin because there
+     is no black square in front of them to hold a number. */
+  table.kboard th.rim {
+    font-size: .72rem;
+    font-weight: 700;
+    color: var(--muted);
+    min-width: var(--tap);
+    height: var(--tap);
+    white-space: nowrap;
+  }
+  table.kboard th.rim-left { text-align: right; padding-right: .35rem; }
+  table.kboard th.rim-top { vertical-align: bottom; padding-bottom: .2rem; }
+
+  td.kcell {
+    width: var(--tap);
+    height: var(--tap);
+    border: 1px solid var(--line-strong);
+    position: relative;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* A black square that carries at least one total. The diagonal separates the two
+     numbers and is drawn as a background rather than as a border or an extra element,
+     so it cannot be mistaken for a grid line and nothing inside the square has to move
+     out of its way. */
+  td.kcell.black.heads {
+    background-image: linear-gradient(
+      to bottom right,
+      transparent calc(50% - .5px), var(--line-strong) calc(50% - .5px),
+      var(--line-strong) calc(50% + .5px), transparent calc(50% + .5px)
+    );
+    background-color: color-mix(in srgb, var(--line-strong) 22%, transparent);
+  }
+  /* A black square that carries nothing is drawn solid, with no diagonal.
+     In a printed Kakuro a diagonal means "two runs start here", so drawing one on a
+     square with no numbers on it says a run starts there whose total is missing. The
+     first screenshot of this page had a diagonal on every black square, which is a
+     board that reads as broken to anybody who knows the game. */
+  td.kcell.black.blank {
+    background-color: color-mix(in srgb, var(--line-strong) 70%, var(--paper));
+  }
+  /* The across total above the diagonal, the down total below it. That is where a
+     printed Kakuro puts them, and putting them anywhere else would make a familiar
+     puzzle unreadable to somebody who already knows the game. */
+  td.kcell .across-total,
+  td.kcell .down-total {
+    position: absolute;
+    font-size: .62rem;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--ink);
+  }
+  td.kcell .across-total { top: .12rem; right: .16rem; }
+  td.kcell .down-total { bottom: .12rem; left: .16rem; }
+
+  td.kcell.white {
+    background: transparent;
+    cursor: text;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--filled);
+  }
+  td.kcell.white:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+  td.kcell.white[data-hint="yes"] { outline: 3px dashed var(--accent); outline-offset: -3px; }
+  /* A run with a digit in it twice. Marked on the squares of that run, because
+     "somewhere on the board there is a repeat" is not help. The core decides which
+     runs these are; the page only draws them. */
+  td.kcell.white.repeat { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+
   /* ---- controls ------------------------------------------------------ */
   .controls { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0 .5rem; }
   button {
@@ -280,6 +360,7 @@
 
     <div class="board-scroll">
       <table class="board" id="board"></table>
+      <table class="kboard" id="kboard" hidden></table>
       <svg id="loop" hidden xmlns="http://www.w3.org/2000/svg" role="group"></svg>
     </div>
     <p class="shape" id="shape" role="status" aria-live="polite" hidden></p>
@@ -379,6 +460,20 @@ const NEXT_LINE = {
  *  and `Side.Down`, which are 0 and 1, so a square is the one after them. */
 const SQUARE = 2;
 
+/** And a white square of a Kakuro, the one after that.
+ *
+ *  A separate number from SQUARE although both carry a row and a column, because the
+ *  two count different things: a Nonogram's pair indexes the only squares there are,
+ *  a Kakuro's indexes the whole grid with its black squares in it. These numbers come
+ *  from `gs_web::browser`; there is no second copy of them. */
+const DIGIT = 3;
+
+/** What the core sends for a black square where a digit would be, and for a total that
+ *  is not there. Both are -1, and neither is 0: a white square with nothing written in
+ *  it is 0, and that is the commonest square on the board. */
+const BLACK = -1;
+const NO_TOTAL = -1;
+
 /** How far apart the dots are drawn, and how much room is left round the edge. */
 const STEP = 34;
 const MARGIN = 20;
@@ -390,6 +485,8 @@ const HOW_TO = {
     "Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.",
   slitherlink:
     "Tap between two dots to draw a line, again to rule it out, again to clear it. Ruling lines out is just for you: the puzzle is done when the lines make one loop and every number is met.",
+  kakuro:
+    "Tap a white square and type a digit from 1 to 9. Backspace empties it. Arrow keys move from square to square, so you can play the whole thing without a mouse.",
 };
 
 /** The rules of each game, in the player's words rather than the solver's.
@@ -422,6 +519,17 @@ const RULES = {
     "Tap between two dots to draw a line, again to rule it out, again to clear it.",
     "Stuck? Hint works part of the puzzle out and marks it in for you, and says which number or dot makes it certain.",
     "There are three for each puzzle, and they get bigger: one line, then half a row or column of lines, then a whole one.",
+  ],
+  kakuro: [
+    "A crossword done with numbers.",
+    "Write a digit from 1 to 9 in every white square.",
+    "A run is a straight line of white squares, going across or going down, with nothing black in the middle of it.",
+    "Each run has a total. The digits in that run have to add up to it.",
+    "No digit may appear twice in the same run. The same digit in two different runs is fine.",
+    "The totals are written in the black squares: the one above the diagonal is for the run going right, the one below it is for the run going down. Runs that start at the very edge have their total in the margin.",
+    "Tap a white square and type a digit. Backspace empties it. Arrow keys move between squares.",
+    "Stuck? Hint works part of the puzzle out and fills it in for you, and says what made it certain.",
+    "There are three for each puzzle, and they get bigger: one square, then half a run, then a whole run.",
   ],
 };
 
@@ -459,6 +567,7 @@ function showRules(family) {
 const NAMES = {
   nonogram: "Nonogram",
   slitherlink: "Slitherlink",
+  kakuro: "Kakuro",
 };
 
 let game = null;
@@ -527,6 +636,169 @@ function drawBoard() {
       tr.appendChild(td);
     }
     table.appendChild(tr);
+  }
+}
+
+/** A Kakuro square's whole name, for somebody who cannot see it.
+ *
+ *  Said in the same shape as the other two games' names: where it is, then what is in
+ *  it. A black square says what totals it carries, because that is its entire content
+ *  and a screen reader skipping over it would be skipping the clues. */
+function kakuroName(column, row, digit, across, down) {
+  const where = `row ${row + 1}, column ${column + 1}`;
+  if (digit === BLACK) {
+    const totals = [];
+    if (across !== NO_TOTAL) totals.push(`${across} across`);
+    if (down !== NO_TOTAL) totals.push(`${down} down`);
+    return totals.length ? `${where}, totals ${totals.join(", ")}` : `${where}, blocked`;
+  }
+  return `${where}, ${digit === 0 ? "empty" : digit}`;
+}
+
+/** Build the Kakuro grid once. Typing changes digits in place after this.
+ *
+ *  The shape comes from `game.kakuro_shape()` and the rim totals from
+ *  `game.rim_totals()`, so this page never works out which squares are black or which
+ *  run a total belongs to. Both are asked for once: the shape of a Kakuro cannot
+ *  change while it is being played. */
+function drawKakuroBoard() {
+  const width = game.width();
+  const height = game.height();
+  const shape = Array.from(game.kakuro_shape());
+  const table = el("kboard");
+  table.replaceChildren();
+
+  // The rim totals, read into two lookups so the loops below stay simple. Four numbers
+  // each: column, row, across total, down total.
+  const rim = Array.from(game.rim_totals());
+  const rimAcross = new Map();
+  const rimDown = new Map();
+  for (let i = 0; i < rim.length; i += 4) {
+    const column = rim[i];
+    const row = rim[i + 1];
+    if (rim[i + 2] !== NO_TOTAL) rimAcross.set(row, rim[i + 2]);
+    if (rim[i + 3] !== NO_TOTAL) rimDown.set(column, rim[i + 3]);
+  }
+
+  const head = document.createElement("tr");
+  head.appendChild(Object.assign(document.createElement("th"), { className: "corner" }));
+  for (let column = 0; column < width; column += 1) {
+    const th = document.createElement("th");
+    th.className = "rim rim-top";
+    th.scope = "col";
+    const total = rimDown.get(column);
+    th.textContent = total === undefined ? "" : String(total);
+    if (total !== undefined) th.setAttribute("aria-label", `${total} down, column ${column + 1}`);
+    head.appendChild(th);
+  }
+  table.appendChild(head);
+
+  for (let row = 0; row < height; row += 1) {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.className = "rim rim-left";
+    th.scope = "row";
+    const total = rimAcross.get(row);
+    th.textContent = total === undefined ? "" : String(total);
+    if (total !== undefined) th.setAttribute("aria-label", `${total} across, row ${row + 1}`);
+    tr.appendChild(th);
+
+    for (let column = 0; column < width; column += 1) {
+      const at = (row * width + column) * 3;
+      const black = shape[at] === 1;
+      const across = shape[at + 1];
+      const down = shape[at + 2];
+      const heads = across !== NO_TOTAL || down !== NO_TOTAL;
+      const td = document.createElement("td");
+      td.className = black ? `kcell black ${heads ? "heads" : "blank"}` : "kcell white";
+      td.dataset.row = String(row);
+      td.dataset.column = String(column);
+      if (black) {
+        const bits = [];
+        if (across !== NO_TOTAL) {
+          bits.push(Object.assign(document.createElement("span"), {
+            className: "across-total",
+            textContent: String(across),
+          }));
+        }
+        if (down !== NO_TOTAL) {
+          bits.push(Object.assign(document.createElement("span"), {
+            className: "down-total",
+            textContent: String(down),
+          }));
+        }
+        td.replaceChildren(...bits);
+        // Not focusable and not a button. There is no move that changes a black
+        // square, so putting it in the tab order would be giving somebody playing by
+        // keyboard a stop that does nothing.
+        td.setAttribute("aria-label", kakuroName(column, row, BLACK, across, down));
+      } else {
+        td.tabIndex = 0;
+        // `textbox`, not `button`. A white square takes a value rather than being
+        // switched, and announcing it as a button would tell somebody using a screen
+        // reader to press Enter when what they need to do is type a digit.
+        td.setAttribute("role", "textbox");
+        td.setAttribute("aria-readonly", "false");
+        td.setAttribute("aria-label", kakuroName(column, row, 0, NO_TOTAL, NO_TOTAL));
+      }
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+}
+
+/** Copy the core's digits onto the Kakuro grid. */
+function refreshKakuro() {
+  const width = game.width();
+  const digits = Array.from(game.digits());
+  for (const td of el("kboard").querySelectorAll("td.kcell.white")) {
+    const row = Number(td.dataset.row);
+    const column = Number(td.dataset.column);
+    const digit = digits[row * width + column];
+    td.textContent = digit > 0 ? String(digit) : "";
+    // Reset here rather than where it was typed, because the core can change a square
+    // the player did not touch: undo, redo, a hint, or loading a saved game.
+    td.setAttribute("aria-label", kakuroName(column, row, digit, NO_TOTAL, NO_TOTAL));
+  }
+}
+
+/** Write a digit, or empty the square when `digit` is 0.
+ *
+ *  Zero goes straight to the core, which turns it into an empty square. The page does
+ *  not decide that nought is not a Kakuro digit — `write_and_say` does, beside the rule
+ *  it comes from. */
+function typeDigit(td, digit) {
+  clearHintRing();
+  el("note").textContent = game.write_and_say(
+    Number(td.dataset.column),
+    Number(td.dataset.row),
+    digit
+  );
+  refresh();
+}
+
+/** Move the keyboard to the next white square in a direction, skipping black ones.
+ *
+ *  Skipping rather than stopping: a black square is part of the board's shape and
+ *  there is nothing to do to it, so landing on one would be a dead stop in the middle
+ *  of a row. Running off the edge stays where it is rather than wrapping, because
+ *  wrapping to the far side of the board is disorienting when you cannot see it. */
+function stepTo(td, byColumn, byRow) {
+  const width = game.width();
+  const height = game.height();
+  let column = Number(td.dataset.column);
+  let row = Number(td.dataset.row);
+  for (let guard = 0; guard < width * height; guard += 1) {
+    column += byColumn;
+    row += byRow;
+    if (column < 0 || row < 0 || column >= width || row >= height) return;
+    const next = el("kboard").querySelector(
+      `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+    );
+    if (next) {
+      next.focus();
+      return;
+    }
   }
 }
 
@@ -702,9 +974,13 @@ function askForAHint() {
     const marked =
       kind === SQUARE
         ? el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`)
-        : el("loop").querySelector(
-            `g.edge[data-side="${kind}"][data-column="${column}"][data-row="${row}"]`
-          );
+        : kind === DIGIT
+          ? el("kboard").querySelector(
+              `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+            )
+          : el("loop").querySelector(
+              `g.edge[data-side="${kind}"][data-column="${column}"][data-row="${row}"]`
+            );
     if (!marked) continue;
     marked.dataset.hint = "yes";
     if (!first) first = marked;
@@ -720,6 +996,8 @@ function askForAHint() {
 function refresh() {
   if (game.family() === "slitherlink") {
     refreshLoop();
+  } else if (game.family() === "kakuro") {
+    refreshKakuro();
   } else {
     const board = game.board();
     const width = game.width();
@@ -735,6 +1013,22 @@ function refresh() {
     }
   }
 
+  // The one useful thing each game can say about a part-finished board. Both come
+  // from the core: `shape` for the loop game, `how_it_is_going` for this one.
+  if (game.family() === "kakuro") {
+    el("shape").textContent = game.how_it_is_going();
+    // The squares of any run holding a digit twice. The core names the squares; the
+    // page only paints them. Two numbers each, a column then a row.
+    const repeats = new Set();
+    const flagged = Array.from(game.squares_with_a_repeat());
+    for (let i = 0; i < flagged.length; i += 2) {
+      repeats.add(`${flagged[i]},${flagged[i + 1]}`);
+    }
+    for (const td of el("kboard").querySelectorAll("td.kcell.white")) {
+      td.classList.toggle("repeat", repeats.has(`${td.dataset.column},${td.dataset.row}`));
+    }
+  }
+
   refreshHintsLeft();
 
   const moves = game.moves_made();
@@ -747,7 +1041,9 @@ function refresh() {
   el("solved").textContent =
     game.family() === "slitherlink"
       ? "Solved. One loop, and every number met."
-      : "Solved. Every clue matches.";
+      : game.family() === "kakuro"
+        ? "Solved. Every run adds up, with no digit twice."
+        : "Solved. Every clue matches.";
 
   // "Delivered is not played." A saved puzzle stops being held only once it is
   // actually finished, which is the whole reason downloading five leaves five.
@@ -794,21 +1090,32 @@ function showPuzzle(puzzle) {
   el("encoding").textContent = `one answer only, under ${puzzle.encoding()}`;
 
   game = puzzle.play();
-  const loop = game.family() === "slitherlink";
-  el("board").hidden = loop;
+  const family = game.family();
+  const loop = family === "slitherlink";
+  const kakuro = family === "kakuro";
+  el("board").hidden = loop || kakuro;
+  el("kboard").hidden = !kakuro;
   // `toggleAttribute`, not `.hidden`. An SVG element is not an HTMLElement, so it has
   // no `hidden` property: assigning one sets a JavaScript field that nothing reads and
   // leaves the attribute exactly as it was. The board stayed invisible and every check
   // that asked `.hidden` agreed with it, which is how this went unnoticed.
   el("loop").toggleAttribute("hidden", !loop);
-  el("shape").hidden = !loop;
-  // The other game's board goes away, not just out of sight. A hidden board left in the
-  // page is a board that can be found by anything looking for one.
+  // Both games have something to say about a part-finished board, in the same line.
+  el("shape").hidden = !(loop || kakuro);
+  // The other games' boards go away, not just out of sight. A hidden board left in the
+  // page is a board that can be found by anything looking for one — which is exactly
+  // how an invisible Slitherlink board got past every automated check once already.
   if (loop) {
     el("board").replaceChildren();
+    el("kboard").replaceChildren();
     drawLoopBoard();
+  } else if (kakuro) {
+    el("board").replaceChildren();
+    el("loop").replaceChildren();
+    drawKakuroBoard();
   } else {
     el("loop").replaceChildren();
+    el("kboard").replaceChildren();
     drawBoard();
   }
   // A new puzzle, so a new three hints and no hint on the screen from the last one.
@@ -1067,6 +1374,41 @@ async function main() {
     event.preventDefault();
     tap(td);
   });
+  // Tapping a white square puts the keyboard on it. Nothing is written by a tap: a
+  // Kakuro square takes a value, and there is no value in a tap. On a phone, focusing
+  // the square is what brings the on-screen keyboard up.
+  el("kboard").addEventListener("click", (event) => {
+    const td = event.target.closest("td.kcell.white");
+    if (td) td.focus();
+  });
+  el("kboard").addEventListener("keydown", (event) => {
+    const td = event.target.closest("td.kcell.white");
+    if (!td) return;
+    const key = event.key;
+    if (key >= "1" && key <= "9") {
+      event.preventDefault();
+      typeDigit(td, Number(key));
+      return;
+    }
+    // Backspace, Delete and a typed nought all mean the same thing. Nought is in here
+    // because somebody will type it, and the honest answer is to empty the square
+    // rather than to refuse a keystroke with no explanation.
+    if (key === "Backspace" || key === "Delete" || key === "0") {
+      event.preventDefault();
+      typeDigit(td, 0);
+      return;
+    }
+    const steps = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
+    if (steps[key]) {
+      event.preventDefault();
+      stepTo(td, steps[key][0], steps[key][1]);
+    }
+  });
   el("loop").addEventListener("click", (event) => {
     const edge = event.target.closest("g.edge");
     if (edge) tapLine(edge);
@@ -1252,6 +1594,68 @@ window.gatedspark = {
   numbersMet: () =>
     el("loop").querySelectorAll('text.number[data-met="yes"]').length,
   shapeSaid: () => el("shape").textContent,
+
+  // The digit game. Same idea again: a handle on what is on the screen, so a check
+  // reads the page rather than asking the core twice. Everything here looks at
+  // `#kboard`, which is a different table from the picture game's on purpose.
+  kakuroSquares: () => el("kboard").querySelectorAll("td.kcell").length,
+  whiteSquares: () => el("kboard").querySelectorAll("td.kcell.white").length,
+  blackSquares: () => el("kboard").querySelectorAll("td.kcell.black").length,
+  totalsOnTheBoard: () =>
+    el("kboard").querySelectorAll(".across-total, .down-total").length +
+    Array.from(el("kboard").querySelectorAll("th.rim")).filter((th) => th.textContent !== "")
+      .length,
+  digitAt: (column, row) => {
+    const td = el("kboard").querySelector(
+      `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+    );
+    return td ? td.textContent : null;
+  },
+  // What a key press does, driven through the page's own handler rather than by
+  // calling the core: the keyboard is the thing being checked.
+  focusSquare: (column, row) => {
+    const td = el("kboard").querySelector(
+      `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+    );
+    if (!td) return null;
+    td.focus();
+    return document.activeElement === td;
+  },
+  focusedSquare: () => {
+    const td = document.activeElement;
+    if (!td || !td.dataset || td.dataset.column === undefined) return null;
+    return [Number(td.dataset.column), Number(td.dataset.row)];
+  },
+  focusedSquareName: () => document.activeElement?.getAttribute("aria-label") ?? null,
+  // Writing without a key press, for a check that has a whole board to lay in and no
+  // reason to drive the keyboard a hundred times. It goes through the same `typeDigit`
+  // the keyboard handler calls, so it is not a second way to write a digit.
+  writeDigit: (column, row, digit) => {
+    const td = el("kboard").querySelector(
+      `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+    );
+    if (!td) return false;
+    typeDigit(td, digit);
+    return true;
+  },
+  whiteSquaresInOrder: () =>
+    Array.from(el("kboard").querySelectorAll("td.kcell.white")).map((td) => [
+      Number(td.dataset.column),
+      Number(td.dataset.row),
+    ]),
+  squareName: (column, row) =>
+    el("kboard")
+      .querySelector(`td.kcell[data-row="${row}"][data-column="${column}"]`)
+      ?.getAttribute("aria-label") ?? null,
+  squaresWithARepeat: () => el("kboard").querySelectorAll("td.kcell.white.repeat").length,
+  kboardIsShowing: () => !el("kboard").hidden,
+  kboardSize: () => el("kboard").getBoundingClientRect().width,
+  hintedDigits: () =>
+    Array.from(el("kboard").querySelectorAll('td.kcell.white[data-hint="yes"]')).map((td) => [
+      Number(td.dataset.column),
+      Number(td.dataset.row),
+      td.textContent,
+    ]),
 
   // Hints. Each one reads the page, so a check sees what a player sees rather than
   // asking the core the same question twice.

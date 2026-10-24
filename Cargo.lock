@@ -194,6 +194,7 @@ dependencies = [
  "getrandom",
  "gs-core",
  "gs-crypto",
+ "gs-kakuro",
  "gs-nonogram",
  "gs-slitherlink",
  "gs-solver",
@@ -269,6 +270,7 @@ version = "0.0.1"
 dependencies = [
  "gs-core",
  "gs-crypto",
+ "gs-kakuro",
  "gs-nonogram",
  "gs-offline",
  "gs-slitherlink",

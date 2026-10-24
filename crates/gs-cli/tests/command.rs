@@ -327,10 +327,60 @@ fn a_flag_that_belongs_to_the_other_game_is_refused_rather_than_ignored() {
         &temp.text("no-solver-here"),
     ]);
     assert!(!size.status.success());
+    // Not "--size is for slitherlink" any more. Two games take --size now, so naming
+    // one of them would be a message that is wrong half the time; what is true is that
+    // it is not a nonogram flag.
     assert!(
-        stderr(&size).contains("--size is for slitherlink"),
+        stderr(&size).contains("--size is not a nonogram flag"),
         "{}",
         stderr(&size)
+    );
+
+    // The same rule the other way: Kakuro's own two flags are refused on the games
+    // that have no use for them, rather than being read and ignored.
+    for family in ["nonogram", "slitherlink"] {
+        let black = run(&[
+            "fill",
+            "--store",
+            &temp.text("store"),
+            "--key",
+            &key,
+            "--family",
+            family,
+            "--black",
+            "200",
+            "--solver",
+            &temp.text("no-solver-here"),
+        ]);
+        assert!(!black.status.success());
+        assert!(
+            stderr(&black).contains("--black is"),
+            "{family}: {}",
+            stderr(&black)
+        );
+    }
+
+    // And Kakuro refuses --level for its own reason, which is not the same reason
+    // Slitherlink gives.
+    let level_on_kakuro = run(&[
+        "fill",
+        "--store",
+        &temp.text("store"),
+        "--key",
+        &key,
+        "--family",
+        "kakuro",
+        "--level",
+        "gentle",
+        "--solver",
+        &temp.text("no-solver-here"),
+    ]);
+    assert!(!level_on_kakuro.status.success());
+    let said = stderr(&level_on_kakuro);
+    assert!(said.contains("--level is for nonogram"), "{said}");
+    assert!(
+        said.contains("gives away"),
+        "the refusal should say why this game in particular is waiting: {said}"
     );
 }
 
