@@ -22,7 +22,7 @@ use gs_slitherlink::board::{DotId, EdgeId, Geometry};
 use gs_slitherlink::loops::Shape;
 use gs_slitherlink::rules::{Action, Slitherlink, LINE, NO_LINE};
 
-use super::{why, Advice, NoChange, NoHint, PointsAt, HINTS_PER_PUZZLE};
+use super::{why, Advice, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// Which way a line runs.
@@ -234,48 +234,92 @@ impl Session {
             .collect()
     }
 
-    /// The next line the player could work out, and why.
+    /// Work the next part of the puzzle out for the player, and mark it in.
     ///
     /// Worked out here and now from the numbers in the squares and the board in front
     /// of them, by `gs_slitherlink::hint`. There is no answer in this session to look
     /// at, which is what lets a hint work with no signal.
     ///
+    /// The hints grow — one line, half a row or column of lines, then a whole one — and
+    /// every line they settle goes through `mark_edge`, the same door a tap goes
+    /// through. So a hint can be undone line by line, and nothing about the puzzle
+    /// changes.
+    ///
     /// A hint that could say nothing is not charged for, and neither is the same hint
-    /// again: with nothing marked since, there is nothing new to say.
+    /// again, which can only happen when it had nothing to mark.
     pub fn hint(&mut self) -> Result<Advice, NoHint> {
         let spent = self.hints_used >= HINTS_PER_PUZZLE;
         let found = gs_slitherlink::hint::next(
             &self.rules,
             self.timeline.state(),
             gs_slitherlink::solve::Budget::default(),
+            match HintSize::after(self.hints_used) {
+                HintSize::One => gs_slitherlink::hint::Size::OneLine,
+                HintSize::HalfALine => gs_slitherlink::hint::Size::HalfALine,
+                HintSize::AWholeLine => gs_slitherlink::hint::Size::AWholeLine,
+            },
         );
         if !found.is_something() {
             return Err(NoHint::NothingToSay);
         }
         let says = found.plainly();
-        // The same hint again is free. Nothing has changed on the board, so there is
-        // nothing new to say, and charging a player twice for one sentence they asked
-        // to see again would be a sharp practice rather than help.
         let again = self.last_hint.as_deref() == Some(says.as_str());
         if spent && !again {
             return Err(NoHint::NoneLeft);
         }
+
+        // Mark it in. Every line goes through the rules, so a hint cannot write
+        // something a player could not have written themselves.
+        let mut filled = Vec::new();
+        match &found {
+            gs_slitherlink::hint::Hint::Fill { lines, .. } => {
+                for line in lines {
+                    let which = if line.at.across {
+                        Which::Across
+                    } else {
+                        Which::Down
+                    };
+                    let mark = if line.drawn {
+                        Line::Drawn
+                    } else {
+                        Line::RuledOut
+                    };
+                    if self.mark(which, line.at.column, line.at.row, mark).is_ok() {
+                        filled.push(Place::Line {
+                            across: line.at.across,
+                            column: line.at.column,
+                            row: line.at.row,
+                        });
+                    }
+                }
+            }
+            // The player's own wrong line, cleared rather than left for them to find.
+            gs_slitherlink::hint::Hint::DrawnWrong { at } => {
+                let which = if at.across {
+                    Which::Across
+                } else {
+                    Which::Down
+                };
+                if self.mark(which, at.column, at.row, Line::Unknown).is_ok() {
+                    filled.push(Place::Line {
+                        across: at.across,
+                        column: at.column,
+                        row: at.row,
+                    });
+                }
+            }
+            // A number or a dot that cannot work marks nothing: which line around it is
+            // wrong is the player's to decide, and guessing could undo the right one.
+            _ => {}
+        }
+
         if !again {
             self.hints_used = self.hints_used.saturating_add(1);
             self.last_hint = Some(says.clone());
         }
-        let points_at = match found {
-            gs_slitherlink::hint::Hint::Line { at, .. }
-            | gs_slitherlink::hint::Hint::DrawnWrong { at } => PointsAt::Line {
-                across: at.across,
-                column: at.column,
-                row: at.row,
-            },
-            _ => PointsAt::Nowhere,
-        };
         Ok(Advice {
             says,
-            points_at,
+            filled,
             hints_left: self.hints_left(),
         })
     }

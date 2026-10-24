@@ -1,12 +1,15 @@
-//! Hints in the page's own code: the allowance, and what a hint does not do.
+//! Hints in the page's own code: the allowance, the growing sizes, and what a hint
+//! does to the board.
 //!
 //! Whether a hint is *true* is tested in each game's crate, against that game's one
-//! answer. This file is about the three things the page layer is responsible for:
+//! answer. This file is about the four things the page layer is responsible for:
 //!
 //! 1. **Three hints per puzzle, and then no more.**
-//! 2. **A hint is not a move.** The board, the move count and whether the puzzle is
-//!    solved are untouched by asking.
-//! 3. **A hint reaches both games**, with its sentence and somewhere to point.
+//! 2. **The hints grow:** one square or line, then half a row or column, then a whole
+//!    one.
+//! 3. **A hint fills the board in**, through the ordinary rules, so every mark it makes
+//!    is one the player could have made and can take back with undo.
+//! 4. **A hint reaches both games**, with its sentence and the places it filled.
 //!
 //! Both games are loaded the same way a browser loads one, so nothing here can get a
 //! hint on a puzzle that was not signed and checked.
@@ -16,9 +19,7 @@ use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::solve::Budget;
 use gs_slitherlink::generate::{propose, Shape as BoardShape, REMOVAL_BUDGET};
-use gs_web::play::nonogram::Mark;
-use gs_web::play::slitherlink::{Line, Which};
-use gs_web::play::{Advice, NoChange, NoHint, PointsAt, Session, HINTS_PER_PUZZLE};
+use gs_web::play::{NoHint, Place, Session, HINTS_PER_PUZZLE, HINT_SIZES};
 use gs_web::{load, Playable};
 
 const TEST_ONLY_PRIVATE_KEY: [u8; 32] = [
@@ -119,48 +120,11 @@ fn a_puzzle_starts_with_three_hints() {
     }
 }
 
-/// Do what a hint says, so the next hint is a different one.
-///
-/// Reading the sentence rather than the puzzle, because the sentence is what a player
-/// has to go on, and a hint whose words do not match where it points would be worse
-/// than no hint at all.
-fn act_on(session: &mut Session, advice: &Advice) {
-    let made = match advice.points_at {
-        PointsAt::Square { row, column } => {
-            let mark = if advice.says.contains("has to be filled") {
-                Mark::Filled
-            } else {
-                Mark::Empty
-            };
-            session
-                .as_nonogram()
-                .expect("a square belongs to a Nonogram")
-                .mark_at(row, column, mark)
-        }
-        PointsAt::Line {
-            across,
-            column,
-            row,
-        } => {
-            let line = if advice.says.contains("is part of the loop") {
-                Line::Drawn
-            } else {
-                Line::RuledOut
-            };
-            let which = if across { Which::Across } else { Which::Down };
-            session
-                .as_slitherlink()
-                .expect("a line belongs to a Slitherlink")
-                .mark(which, column, row, line)
-        }
-        // A hint about a whole row, or a whole number, which these puzzles do not get
-        // from a board nothing is wrong on.
-        PointsAt::Nowhere => Ok(()),
-    };
-    match made {
-        Ok(()) | Err(NoChange::AlreadyThatWay) => {}
-        Err(why) => panic!("a hint pointed at a move that cannot be made: {why}"),
-    }
+#[test]
+fn the_sizes_and_the_allowance_are_the_same_length() {
+    // Three hints and three sizes. If the two ever disagreed, the last hint would get
+    // whichever size happened to be last in the list rather than the one meant.
+    assert_eq!(HINT_SIZES.len(), usize::from(HINTS_PER_PUZZLE));
 }
 
 #[test]
@@ -174,15 +138,16 @@ fn three_hints_arrive_and_the_fourth_is_refused() {
                 !advice.says.is_empty(),
                 "{game} hint {spent} said nothing at all"
             );
+            assert!(
+                !advice.filled.is_empty(),
+                "{game} hint {spent} filled nothing in"
+            );
             assert_eq!(
                 advice.hints_left,
                 3 - spent,
                 "{game} hint {spent} counted wrongly"
             );
             assert_eq!(session.hints_left(), 3 - spent);
-            // Acted on, so the next hint is a new one. Asking again without marking
-            // anything gets the same sentence back, which is free; see below.
-            act_on(&mut session, &advice);
         }
         assert_eq!(
             session.hint(),
@@ -195,93 +160,158 @@ fn three_hints_arrive_and_the_fourth_is_refused() {
 }
 
 #[test]
-fn the_same_hint_again_is_free() {
-    // A player who taps Hint twice without marking anything has not been helped twice.
-    // Charging them twice for one sentence would be sharp practice rather than help.
+fn the_hints_get_bigger_as_they_are_used() {
+    // What the project owner asked for, as seen from the page: the second hint helps
+    // more than the first, and the third more than the second.
     for (game, mut session) in both_games() {
-        let first = session.hint().expect("a hint on a blank board");
-        assert_eq!(first.hints_left, 2, "{game} first hint");
-        for _ in 0..5 {
-            let again = session.hint().expect("the same hint again");
-            assert_eq!(again.says, first.says, "{game} said something else");
-            assert_eq!(
-                again.hints_left, 2,
-                "{game} charged for a hint it had already given"
-            );
+        let mut sizes = Vec::new();
+        for spent in 1..=3 {
+            let advice = session
+                .hint()
+                .unwrap_or_else(|why| panic!("{game} hint {spent} was refused: {why}"));
+            sizes.push(advice.filled.len());
         }
-        // And once the player has acted on it, the next one is a new hint and costs.
-        act_on(&mut session, &first);
-        let second = session.hint().expect("a second hint");
-        assert_ne!(
-            second.says, first.says,
-            "{game} repeated itself after a move"
+        println!("{game} filled in {sizes:?}");
+        assert_eq!(sizes[0], 1, "{game} first hint is one square or line");
+        assert!(
+            sizes[1] > sizes[0],
+            "{game} second hint ({}) is no bigger than the first ({})",
+            sizes[1],
+            sizes[0]
         );
-        assert_eq!(second.hints_left, 1, "{game} second hint");
+        assert!(
+            sizes[2] > sizes[1],
+            "{game} third hint ({}) is no bigger than the second ({})",
+            sizes[2],
+            sizes[1]
+        );
     }
 }
 
 #[test]
-fn asking_for_a_hint_is_not_a_move() {
+fn a_hint_fills_the_board_in_and_undo_takes_it_back() {
+    // The change the project owner asked for: a hint marks the squares rather than
+    // only pointing at them. It does it through the ordinary rules, which is what
+    // makes undo work, and is also what stops a hint writing something a player could
+    // not have written.
     for (game, mut session) in both_games() {
-        let board = session.board_bytes();
+        let before = session.board_bytes();
         let fingerprint = session.board_fingerprint();
-        let solved = session.is_solved();
-        for _ in 0..3 {
-            let _ = session.hint();
+
+        let advice = session.hint().expect("a hint on a blank board");
+        assert!(!advice.filled.is_empty(), "{game} filled nothing in");
+        assert_eq!(
+            session.moves_made(),
+            advice.filled.len() as u32,
+            "{game} made a different number of moves than it reported filling"
+        );
+        assert_ne!(
+            session.board_bytes(),
+            before,
+            "{game} said it filled squares in and the board is unchanged"
+        );
+
+        // Every mark is undoable, one at a time, back to exactly where the player was.
+        for _ in 0..advice.filled.len() {
+            session
+                .undo()
+                .expect("a hint's marks undo like any other move");
         }
-        assert_eq!(session.moves_made(), 0, "{game} counted a hint as a move");
-        assert_eq!(session.board_bytes(), board, "{game} board changed");
+        assert_eq!(
+            session.board_bytes(),
+            before,
+            "{game} did not come back to where it started"
+        );
         assert_eq!(
             session.board_fingerprint(),
             fingerprint,
-            "{game} board fingerprint changed"
+            "{game} board fingerprint did not come back"
         );
-        assert_eq!(session.is_solved(), solved, "{game} solved answer changed");
-        // Undo is about moves, and a hint was not one, so there is still nothing to
-        // undo. This is the check that would catch a hint quietly marking the board.
+        assert_eq!(session.moves_made(), 0);
+    }
+}
+
+#[test]
+fn a_hint_never_finishes_the_puzzle_by_itself() {
+    // Three hints on a real puzzle help; they do not play it. This is the line between
+    // help and giving the answer away, and the only thing holding it is the allowance.
+    for (game, mut session) in both_games() {
+        for _ in 0..HINTS_PER_PUZZLE {
+            let _ = session.hint();
+        }
         assert!(
-            session.undo().is_err(),
-            "{game} had something to undo after only hints"
+            !session.is_solved(),
+            "{game} was finished by its three hints"
         );
     }
 }
 
 #[test]
-fn a_hint_points_at_the_right_sort_of_thing() {
-    // A Nonogram hint points at a square, a Slitherlink hint at a line. A hint about a
-    // whole row or a whole number points nowhere, which is also allowed — what is not
+fn a_hint_that_marks_nothing_costs_nothing_and_is_free_to_repeat() {
+    // A hint saying a row cannot work marks nothing: which square in it is wrong is the
+    // player's to decide. A player who taps Hint twice on such a board has not been
+    // helped twice, so they are not charged twice.
+    for (game, mut session) in both_games() {
+        let first = session.hint().expect("a hint on a blank board");
+        let left = first.hints_left;
+        for _ in 0..5 {
+            let again = session.hint();
+            match again {
+                Ok(more) if more.says == first.says => assert_eq!(
+                    more.hints_left, left,
+                    "{game} charged again for a hint it had already given"
+                ),
+                // The usual case now: the first hint filled squares in, so the board
+                // moved on and the next hint is a new one that costs.
+                Ok(more) => assert!(more.hints_left < left, "{game} gave a new hint for nothing"),
+                Err(NoHint::NoneLeft) => break,
+                Err(why) => panic!("{game}: {why}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_hint_fills_the_right_sort_of_place() {
+    // A Nonogram hint fills squares, a Slitherlink hint fills lines. What is not
     // allowed is one game being handed the other game's kind of place.
     let mut nonogram = Session::start(a_loaded_nonogram());
     let advice = nonogram.hint().expect("a hint on a blank Nonogram");
     assert!(
-        matches!(
-            advice.points_at,
-            PointsAt::Square { .. } | PointsAt::Nowhere
-        ),
-        "a Nonogram hint pointed at {:?}",
-        advice.points_at
+        advice
+            .filled
+            .iter()
+            .all(|place| matches!(place, Place::Square { .. })),
+        "a Nonogram hint filled {:?}",
+        advice.filled
     );
 
     let mut slitherlink = Session::start(a_loaded_slitherlink());
     let advice = slitherlink.hint().expect("a hint on a blank Slitherlink");
     assert!(
-        matches!(advice.points_at, PointsAt::Line { .. } | PointsAt::Nowhere),
-        "a Slitherlink hint pointed at {:?}",
-        advice.points_at
+        advice
+            .filled
+            .iter()
+            .all(|place| matches!(place, Place::Line { .. })),
+        "a Slitherlink hint filled {:?}",
+        advice.filled
     );
 }
 
 #[test]
-fn a_square_a_hint_points_at_is_on_the_board() {
+fn every_square_a_hint_fills_is_on_the_board() {
     let puzzle = a_loaded_nonogram();
     let dims = puzzle.dims();
     let mut session = Session::start(puzzle);
-    for _ in 0..3 {
+    for _ in 0..HINTS_PER_PUZZLE {
         if let Ok(advice) = session.hint() {
-            if let PointsAt::Square { row, column } = advice.points_at {
+            for place in advice.filled {
+                let Place::Square { row, column } = place else {
+                    panic!("a Nonogram hint filled a line");
+                };
                 assert!(
                     row < dims.height && column < dims.width,
-                    "a hint pointed off the board at row {row}, column {column}"
+                    "a hint filled a square off the board at row {row}, column {column}"
                 );
             }
         }

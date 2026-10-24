@@ -1,25 +1,31 @@
-//! Hints: the next line a player can work out, found on the device from the numbers.
+//! Hints: what a player can be shown next, worked out on the device from the numbers.
 //!
-//! The same arrangement as `gs_nonogram::hint`, and for the same reasons. A hint is a
-//! **deduction** from the numbers in the squares and the lines the player has marked so
-//! far. Nothing reads a stored answer, because a published puzzle carries none. So
+//! The same arrangement as `gs_nonogram::hint`, and for the same reasons. A hint is
+//! **worked out** from the numbers in the squares and the lines the player has marked
+//! so far. Nothing reads a stored answer, because a published puzzle carries none. So
 //! hints work with no signal, and the published site still has no answer in it
 //! anywhere.
 //!
-//! [`next`] makes no move. It says what a player could mark and why, and the marking
-//! stays theirs, which is what keeps a hint assistance and not a change to the puzzle.
+//! [`next`] says what to mark and why. Writing it onto a board is the caller's job,
+//! through the ordinary rules, so a hint goes through the same door as a tap and can be
+//! taken back the same way.
+//!
+//! # Three sizes, in this game's own units
+//!
+//! A Slitherlink has no rows of squares to fill, so [`Size`] counts lines: one line,
+//! half a row or column of them, or a whole row or column. A row here means every line
+//! running left to right between one row of dots and the next, and a column means every
+//! line running top to bottom down one column of dots.
 //!
 //! # What it looks for, in order
 //!
 //! 1. **Something that cannot work**: a square whose number can no longer be met, or a
 //!    dot with three lines at it, or a dot with one line and nowhere for it to go. A
 //!    player stuck behind their own mistake is not helped by a free line somewhere else.
-//! 2. **A forced line**: one that follows from a square's number, or from the rule that
-//!    a dot has either no lines at it or exactly two. These are the deductions a person
-//!    makes, which is why they are also the hints worth giving.
-//! 3. **A line from working the whole puzzle out**, within a budget, when nothing at all
-//!    is forced. The player is told the hint came this way, because "this follows from
-//!    that 3" and "I worked the whole thing out" are different claims.
+//! 2. **Lines the numbers decide.** For a one-line hint, a line that follows from a
+//!    square's number or from the nought-or-two rule at a dot, with that reason named.
+//!    For a bigger hint, the row or column of lines that helps most.
+//! 3. **The whole puzzle worked out**, within a budget, when nothing is forced outright.
 
 use gs_core::state::State;
 
@@ -36,14 +42,29 @@ enum How {
     Undecided,
 }
 
-/// Why a line is forced.
+/// How much help is being asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Size {
+    /// One line.
+    OneLine,
+    /// Half of one row or column of lines.
+    HalfALine,
+    /// A whole row or column of lines.
+    AWholeLine,
+}
+
+/// Why a line is decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Because {
     /// The number in this square. Columns and rows count from 0 at the top left.
     Number { column: u16, row: u16 },
     /// The dot at this corner, which has either no lines at it or exactly two.
     Dot { column: u16, row: u16 },
-    /// Nothing single forced it. The device worked the whole puzzle out.
+    /// Every line running left to right between one row of dots and the next.
+    AcrossRow(u16),
+    /// Every line running top to bottom down one column of dots.
+    DownColumn(u16),
+    /// Nothing single decided it. The device worked the whole puzzle out.
     TheWholePuzzle,
 }
 
@@ -56,16 +77,21 @@ pub struct Where {
     pub row: u16,
 }
 
-/// What a player can work out next.
+/// One line a hint has worked out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Line {
+    pub at: Where,
+    /// True to draw it, false to rule it out.
+    pub drawn: bool,
+}
+
+/// What a player can be shown next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hint {
-    /// Mark this line, drawn or ruled out.
-    Line {
-        at: Where,
-        /// True to draw it, false to rule it out.
-        drawn: bool,
-        because: Because,
-    },
+    /// Lines the numbers decide, with the reason they are decided.
+    ///
+    /// Never empty: a hint with nothing in it is [`Hint::NothingToSay`].
+    Fill { lines: Vec<Line>, because: Because },
     /// This square's number can no longer be met by what is marked around it.
     NumberCannotWork { column: u16, row: u16 },
     /// Too many lines meet at this dot, or one line reaches it and cannot leave.
@@ -94,7 +120,25 @@ impl Because {
                 u32::from(column) + 1,
                 u32::from(row) + 1
             ),
-            Because::TheWholePuzzle => "this puzzle having only one answer".to_string(),
+            Because::AcrossRow(_) | Because::DownColumn(_) | Because::TheWholePuzzle => {
+                "this puzzle having only one answer".to_string()
+            }
+        }
+    }
+
+    /// The run of lines itself, named the way a player points at one.
+    #[must_use]
+    pub fn line_called(self) -> String {
+        match self {
+            Because::AcrossRow(row) => format!(
+                "the lines running left to right along row {}",
+                u32::from(row) + 1
+            ),
+            Because::DownColumn(column) => format!(
+                "the lines running top to bottom down column {}",
+                u32::from(column) + 1
+            ),
+            _ => "the board".to_string(),
         }
     }
 }
@@ -118,16 +162,30 @@ impl Hint {
     #[must_use]
     pub fn plainly(&self) -> String {
         match self {
-            Hint::Line { at, drawn, because } => format!(
-                "{} {}, because of {}.",
-                sentence_case(&at.plainly()),
-                if *drawn {
-                    "is part of the loop"
-                } else {
-                    "is not part of the loop"
-                },
-                because.plainly()
-            ),
+            Hint::Fill { lines, because } => match lines.as_slice() {
+                [] => Hint::NothingToSay.plainly(),
+                [only] => format!(
+                    "{} {}, because of {}.",
+                    sentence_case(&only.at.plainly()),
+                    if only.drawn {
+                        "has been drawn in for you"
+                    } else {
+                        "has been ruled out for you"
+                    },
+                    because.plainly()
+                ),
+                many => {
+                    let drawn = many.iter().filter(|line| line.drawn).count();
+                    format!(
+                        "{} of {} settled for you: {} drawn and {} ruled out, from {}.",
+                        many.len(),
+                        because.line_called(),
+                        drawn,
+                        many.len() - drawn,
+                        because.plainly()
+                    )
+                }
+            },
             Hint::NumberCannotWork { column, row } => format!(
                 "The number in the square at {} across, {} down can no longer be met. \
                  Something around it needs changing.",
@@ -141,7 +199,7 @@ impl Hint {
                 u32::from(*row) + 1
             ),
             Hint::DrawnWrong { at } => format!(
-                "{} is drawn, and it is not part of the loop. Clear it and carry on.",
+                "{} is drawn, and it is not part of the loop. It has been cleared for you.",
                 sentence_case(&at.plainly())
             ),
             Hint::NothingToSay => {
@@ -154,7 +212,11 @@ impl Hint {
     /// against a puzzle's allowance.
     #[must_use]
     pub fn is_something(&self) -> bool {
-        !matches!(self, Hint::NothingToSay)
+        match self {
+            Hint::NothingToSay => false,
+            Hint::Fill { lines, .. } => !lines.is_empty(),
+            _ => true,
+        }
     }
 }
 
@@ -166,11 +228,11 @@ fn sentence_case(said: &str) -> String {
     }
 }
 
-/// The next thing a player can work out on this board.
+/// What a player can be shown next on this board, at the size asked for.
 ///
 /// `state` is the board as the player has it, undecided lines included.
 #[must_use]
-pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
+pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget, size: Size) -> Hint {
     let geometry = puzzle.geometry();
     let how = |edge: EdgeId| -> How {
         match state.get(edge.0) {
@@ -199,10 +261,20 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
         }
     }
 
-    // 2. A forced line. Numbers first, because a number is the more instructive reason,
-    // and in board order after that: the same board always gets the same hint.
+    match size {
+        Size::OneLine => one_line(puzzle, &how, budget),
+        Size::HalfALine | Size::AWholeLine => a_run_of_lines(puzzle, &how, budget, size),
+    }
+}
+
+/// One line, forced outright if possible.
+fn one_line(puzzle: &Slitherlink, how: &dyn Fn(EdgeId) -> How, budget: Budget) -> Hint {
+    let geometry = puzzle.geometry();
+
+    // Numbers first, because a number is the more instructive reason, and in board
+    // order after that: the same board always gets the same hint.
     for (cell, clue) in puzzle.clues.given() {
-        let Some((drawn, undecided)) = at_cell(geometry, cell, &how) else {
+        let Some((drawn, undecided)) = at_cell(geometry, cell, how) else {
             continue;
         };
         let clue = usize::from(clue);
@@ -218,7 +290,7 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
         };
         if let Some(drawn_now) = settles {
             let (column, row) = geometry.cell_at(cell).unwrap_or((0, 0));
-            return line_hint(
+            return one(
                 geometry,
                 undecided[0],
                 drawn_now,
@@ -227,7 +299,7 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
         }
     }
     for dot in geometry.dots() {
-        let (drawn, undecided) = at_dot(geometry, dot, &how);
+        let (drawn, undecided) = at_dot(geometry, dot, how);
         if undecided.is_empty() {
             continue;
         }
@@ -245,7 +317,7 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
         };
         if let Some(drawn_now) = settles {
             let (column, row) = geometry.dot_at(dot).unwrap_or((0, 0));
-            return line_hint(
+            return one(
                 geometry,
                 undecided[0],
                 drawn_now,
@@ -254,33 +326,139 @@ pub fn next(puzzle: &Slitherlink, state: &State, budget: Budget) -> Hint {
         }
     }
 
-    // 3. Nothing is forced. Work the whole puzzle out, within the budget.
-    let found = solve(puzzle, budget);
-    let (Solved::One, Some(answer)) = (found.solved, found.witness.as_ref()) else {
+    // Nothing is forced. Work the whole puzzle out, within the budget.
+    let Some(answer) = worked_out(puzzle, budget) else {
         return Hint::NothingToSay;
     };
-
-    for edge in geometry.edges() {
-        let belongs = drawn_in(answer, edge);
-        if how(edge) == How::Drawn && !belongs {
-            let Some(at) = place(geometry, edge) else {
-                continue;
-            };
-            return Hint::DrawnWrong { at };
-        }
+    if let Some(wrong) = first_mistake(geometry, how, &answer) {
+        return wrong;
     }
     for edge in geometry.edges() {
-        if drawn_in(answer, edge) && how(edge) != How::Drawn {
-            return line_hint(geometry, edge, true, Because::TheWholePuzzle);
+        if drawn_in(&answer, edge) && how(edge) != How::Drawn {
+            return one(geometry, edge, true, Because::TheWholePuzzle);
         }
     }
-
     Hint::NothingToSay
 }
 
-fn line_hint(geometry: Geometry, edge: EdgeId, drawn: bool, because: Because) -> Hint {
+/// Half a run of lines, or a whole one: the row or column that helps most.
+///
+/// The lines come from the puzzle's one answer, worked out here from the numbers. A
+/// whole row is more than the local rules can usually settle, and filling in only the
+/// part that happens to be forced would make "a whole row" mean a different amount on
+/// every board.
+fn a_run_of_lines(
+    puzzle: &Slitherlink,
+    how: &dyn Fn(EdgeId) -> How,
+    budget: Budget,
+    size: Size,
+) -> Hint {
+    let geometry = puzzle.geometry();
+    let Some(answer) = worked_out(puzzle, budget) else {
+        // No answer within the budget, so there is no honest way to fill a run of
+        // lines. Fall back to the one line the local rules can settle, which is less
+        // than was asked for and never wrong.
+        return one_line(puzzle, how, budget);
+    };
+    if let Some(wrong) = first_mistake(geometry, how, &answer) {
+        return wrong;
+    }
+
+    let settled = |edge: EdgeId| {
+        let belongs = drawn_in(&answer, edge);
+        how(edge) == if belongs { How::Drawn } else { How::RuledOut }
+    };
+
+    // The run with the most lines still to settle is the one a fill helps most. Rows
+    // before columns on a tie, and the earliest such run, so the same board always gets
+    // the same hint.
+    let mut best: Option<(usize, Because)> = None;
+    for which in every_run(geometry) {
+        let waiting = edges_in(geometry, which)
+            .into_iter()
+            .filter(|edge| !settled(*edge))
+            .count();
+        if waiting == 0 {
+            continue;
+        }
+        if best.is_none_or(|(most, _)| waiting > most) {
+            best = Some((waiting, which));
+        }
+    }
+    let Some((_, which)) = best else {
+        return Hint::NothingToSay;
+    };
+
+    let edges = edges_in(geometry, which);
+    let wanted = match size {
+        // Half, rounded up, so half of a run of five is three rather than two: a player
+        // asking for half should get at least half.
+        Size::HalfALine => edges.len().div_ceil(2),
+        _ => edges.len(),
+    };
+    // The half that helps most, rather than always the first: a run whose first half is
+    // already settled would otherwise give a hint that fills in nothing.
+    let edges = if wanted < edges.len() {
+        // The two halves overlap when the run has an odd length, which is fine: either
+        // is a run of `wanted` lines at one end of it.
+        let front = &edges[..wanted];
+        let back = &edges[edges.len() - wanted..];
+        let waiting = |part: &[EdgeId]| part.iter().filter(|e| !settled(**e)).count();
+        if waiting(back) > waiting(front) {
+            back.to_vec()
+        } else {
+            front.to_vec()
+        }
+    } else {
+        edges
+    };
+
+    let lines: Vec<Line> = edges
+        .into_iter()
+        .filter(|edge| !settled(*edge))
+        .filter_map(|edge| {
+            Some(Line {
+                at: place(geometry, edge)?,
+                drawn: drawn_in(&answer, edge),
+            })
+        })
+        .collect();
+    if lines.is_empty() {
+        return Hint::NothingToSay;
+    }
+    Hint::Fill {
+        lines,
+        because: which,
+    }
+}
+
+/// The puzzle's one answer, worked out here from the numbers within a budget.
+fn worked_out(puzzle: &Slitherlink, budget: Budget) -> Option<State> {
+    let found = solve(puzzle, budget);
+    match (found.solved, found.witness) {
+        (Solved::One, Some(answer)) => Some(answer),
+        _ => None,
+    }
+}
+
+/// A line the player has drawn that the answer does not.
+fn first_mistake(geometry: Geometry, how: &dyn Fn(EdgeId) -> How, answer: &State) -> Option<Hint> {
+    for edge in geometry.edges() {
+        if how(edge) == How::Drawn && !drawn_in(answer, edge) {
+            return Some(Hint::DrawnWrong {
+                at: place(geometry, edge)?,
+            });
+        }
+    }
+    None
+}
+
+fn one(geometry: Geometry, edge: EdgeId, drawn: bool, because: Because) -> Hint {
     match place(geometry, edge) {
-        Some(at) => Hint::Line { at, drawn, because },
+        Some(at) => Hint::Fill {
+            lines: vec![Line { at, drawn }],
+            because,
+        },
         None => Hint::NothingToSay,
     }
 }
@@ -292,6 +470,27 @@ fn place(geometry: Geometry, edge: EdgeId) -> Option<Where> {
         column,
         row,
     })
+}
+
+/// Every row of across-lines, then every column of down-lines.
+fn every_run(geometry: Geometry) -> Vec<Because> {
+    (0..geometry.dots_down())
+        .map(Because::AcrossRow)
+        .chain((0..geometry.dots_across()).map(Because::DownColumn))
+        .collect()
+}
+
+/// The lines in one run, in order along it.
+fn edges_in(geometry: Geometry, which: Because) -> Vec<EdgeId> {
+    match which {
+        Because::AcrossRow(row) => (0..geometry.width())
+            .filter_map(|x| geometry.across(x, row))
+            .collect(),
+        Because::DownColumn(column) => (0..geometry.height())
+            .filter_map(|y| geometry.down(column, y))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// How many of a square's four sides are drawn, and which are still undecided.

@@ -10,7 +10,7 @@ use gs_core::state::{Cell, State};
 use gs_core::timeline::Timeline;
 use gs_nonogram::rules::{mark_of, Action, Nonogram, EMPTY, FILLED};
 
-use super::{why, Advice, NoChange, NoHint, PointsAt, HINTS_PER_PUZZLE};
+use super::{why, Advice, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// What a player can do to a square.
@@ -34,6 +34,16 @@ impl Mark {
             Mark::Filled => FILLED,
             Mark::Empty => EMPTY,
             Mark::Unknown => Cell::UNKNOWN,
+        }
+    }
+
+    /// The same three states, as the line solver and the hints talk about them.
+    #[must_use]
+    pub fn of_line(mark: gs_nonogram::line::Mark) -> Mark {
+        match mark {
+            gs_nonogram::line::Mark::Filled => Mark::Filled,
+            gs_nonogram::line::Mark::Empty => Mark::Empty,
+            gs_nonogram::line::Mark::Unknown => Mark::Unknown,
         }
     }
 
@@ -131,47 +141,82 @@ impl Session {
         self.mark(index, mark)
     }
 
-    /// The next square the player could work out, and why.
+    /// Work the next part of the puzzle out for the player, and mark it in.
     ///
     /// Worked out here and now from the clue numbers and the board in front of them, by
     /// `gs_nonogram::hint`. There is no answer in this session to look at: a published
     /// puzzle carries clues and a proof, and no board. That is what lets a hint work
     /// with no signal.
     ///
+    /// The hints grow — one square, half a row or column, then a whole one — and every
+    /// square they fill in goes through `mark`, the same door a tap goes through. So a
+    /// hint can be undone square by square, and nothing about the puzzle changes.
+    ///
     /// A hint that could say nothing is not charged for, and neither is the same hint
-    /// again: with nothing marked since, there is nothing new to say.
+    /// again, which can only happen when it had nothing to mark.
     pub fn hint(&mut self) -> Result<Advice, NoHint> {
         let spent = self.hints_used >= HINTS_PER_PUZZLE;
         let found = gs_nonogram::hint::next(
             &self.rules,
             self.timeline.state(),
             gs_nonogram::solve::Budget::default(),
+            match HintSize::after(self.hints_used) {
+                HintSize::One => gs_nonogram::hint::Size::OneSquare,
+                HintSize::HalfALine => gs_nonogram::hint::Size::HalfALine,
+                HintSize::AWholeLine => gs_nonogram::hint::Size::AWholeLine,
+            },
         );
         if !found.is_something() {
             return Err(NoHint::NothingToSay);
         }
         let says = found.plainly();
-        // The same hint again is free. Nothing has changed on the board, so there is
-        // nothing new to say, and charging a player twice for one sentence they asked
-        // to see again would be a sharp practice rather than help.
         let again = self.last_hint.as_deref() == Some(says.as_str());
         if spent && !again {
             return Err(NoHint::NoneLeft);
         }
+
+        // Mark it in. Every square goes through the rules, so a hint cannot write
+        // something a player could not have written themselves.
+        let mut filled = Vec::new();
+        match &found {
+            gs_nonogram::hint::Hint::Fill { squares, .. } => {
+                for square in squares {
+                    if self
+                        .mark_at(square.row, square.column, Mark::of_line(square.mark))
+                        .is_ok()
+                    {
+                        filled.push(Place::Square {
+                            row: square.row,
+                            column: square.column,
+                        });
+                    }
+                }
+            }
+            // The player's own wrong square, cleared rather than left for them to
+            // find. Clearing is a move like any other.
+            gs_nonogram::hint::Hint::FilledWrong { row, column } => {
+                // Cleared first, then reported, rather than inside the test: a match
+                // guard that changes the board would be a trap for the next reader.
+                let cleared = self.mark_at(*row, *column, Mark::Unknown);
+                if cleared.is_ok() {
+                    filled.push(Place::Square {
+                        row: *row,
+                        column: *column,
+                    });
+                }
+            }
+            // A line that cannot work marks nothing: which of those squares is wrong is
+            // the player's to decide, and guessing for them could undo the right one.
+            _ => {}
+        }
+
         if !again {
             self.hints_used = self.hints_used.saturating_add(1);
             self.last_hint = Some(says.clone());
         }
-        let points_at = match found {
-            gs_nonogram::hint::Hint::Square { row, column, .. }
-            | gs_nonogram::hint::Hint::FilledWrong { row, column } => {
-                PointsAt::Square { row, column }
-            }
-            _ => PointsAt::Nowhere,
-        };
         Ok(Advice {
             says,
-            points_at,
+            filled,
             hints_left: self.hints_left(),
         })
     }

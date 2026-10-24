@@ -31,7 +31,7 @@ use gs_crypto::{Ed25519Signer, Sha256};
 use gs_nonogram::difficulty::{propose_in_band, BANDS};
 use gs_nonogram::publish::publish;
 use gs_nonogram::solve::Budget;
-use gs_web::browser::{Drawn, Page, Side, Square};
+use gs_web::browser::{Drawn, Page, Side, Square, SQUARE};
 
 // Not in Node, in a browser. The distinction matters: Node has a filesystem and
 // a process model, and a test passing there would say nothing about the place this
@@ -362,11 +362,12 @@ fn taking_back_a_move_works_through_the_browser() {
 }
 
 #[wasm_bindgen_test]
-fn three_hints_arrive_in_a_browser_and_the_fourth_is_refused() {
+fn three_growing_hints_arrive_in_a_browser_and_the_fourth_is_refused() {
     // Hints are worked out inside the browser from the clues, with nothing fetched. The
     // part only a browser can show is that the reasoning really runs in a browser's
-    // WebAssembly engine, and that a refusal comes back as something a page can catch
-    // and show rather than as a crash.
+    // WebAssembly engine, that the places a hint filled in cross the boundary as the
+    // flat list of numbers the page reads, and that a refusal comes back as something a
+    // page can catch and show rather than as a crash.
     let package = a_signed_package(&TEST_ONLY_PRIVATE_KEY, KEY_ID);
     let mut game = a_page_that_trusts_us()
         .open(&package)
@@ -375,6 +376,9 @@ fn three_hints_arrive_in_a_browser_and_the_fourth_is_refused() {
 
     assert_eq!(game.hints_per_puzzle(), 3);
     assert_eq!(game.hints_left(), 3);
+
+    let mut filled_so_far = 0u32;
+    let mut sizes = Vec::new();
 
     for spent in 1..=3u32 {
         let hint = game
@@ -388,37 +392,56 @@ fn three_hints_arrive_in_a_browser_and_the_fourth_is_refused() {
         );
         assert_eq!(hint.hints_left(), 3 - spent);
         assert_eq!(game.hints_left(), 3 - spent);
+
+        // Three numbers per place: what kind it is, then the row and the column. A
+        // Nonogram hint fills squares, so every kind is a square.
+        let places = hint.places();
         assert_eq!(
-            hint.points_at(),
-            "square",
-            "a Nonogram hint should point at a square"
+            places.len() % 3,
+            0,
+            "hint {spent} handed back a half-finished place: {places:?}"
         );
-        assert!(hint.row() >= 0 && hint.column() >= 0);
-        assert_eq!(hint.side(), -1, "a square is not a line");
+        let how_many = places.len() / 3;
+        assert!(how_many > 0, "hint {spent} filled nothing in");
+        assert_eq!(
+            how_many,
+            hint.filled(),
+            "hint {spent} counted its own places wrongly"
+        );
+        for place in places.chunks(3) {
+            assert_eq!(place[0], SQUARE, "a Nonogram hint filled something else");
+            assert!(place[1] >= 0 && place[2] >= 0, "off the board: {place:?}");
+        }
+        sizes.push(how_many);
 
-        // The same hint again, which is free: nothing has been marked since.
-        let again = game.hint().expect("the same hint again");
-        assert_eq!(again.says(), says, "it said something else");
-        assert_eq!(game.hints_left(), 3 - spent, "a repeat was charged for");
-
-        // Then do what it says, so the next hint is a new one.
-        let mark = if says.contains("has to be filled") {
-            Square::Filled
-        } else {
-            Square::Empty
-        };
-        let row = u16::try_from(hint.row()).expect("a row on the board");
-        let column = u16::try_from(hint.column()).expect("a column on the board");
-        assert!(
-            game.mark(row, column, mark),
-            "hint {spent} pointed at a square that cannot be marked"
+        // Every place was marked, through the ordinary rules, so each one is a move.
+        filled_so_far += u32::try_from(how_many).expect("a small count");
+        assert_eq!(
+            game.moves_made(),
+            filled_so_far,
+            "hint {spent} said it filled {how_many} squares and the moves do not agree"
         );
     }
 
     assert!(game.hint().is_err(), "a fourth hint was given away");
     assert_eq!(game.hints_left(), 0);
-    // Three marks, from doing what the three hints said. Asking itself cost nothing.
-    assert_eq!(game.moves_made(), 3);
+
+    // The hints grow: one square, then half a row or column, then a whole one.
+    assert_eq!(sizes[0], 1, "the first hint is one square");
+    assert!(
+        sizes[1] > sizes[0],
+        "the second hint is no bigger: {sizes:?}"
+    );
+    assert!(
+        sizes[2] > sizes[1],
+        "the third hint is no bigger: {sizes:?}"
+    );
+
+    // And a hint's marks undo like any other move.
+    for _ in 0..filled_so_far {
+        assert!(game.undo(), "a hint's mark would not undo");
+    }
+    assert_eq!(game.moves_made(), 0);
 }
 
 // ---------------------------------------------------------------------------
