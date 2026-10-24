@@ -214,6 +214,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gs-kakuro"
+version = "0.0.1"
+dependencies = [
+ "gs-core",
+]
+
+[[package]]
 name = "gs-nonogram"
 version = "0.0.1"
 dependencies = [
