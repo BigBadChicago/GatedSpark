@@ -121,11 +121,13 @@ pub fn report_for(
         encoding: ENCODING,
         measurements: measurements_of(candidate),
         // **No difficulty level, on purpose**, for the third time and the same reason
-        // (settled 2026-10-22: levels are each game's to decide). This family has a
-        // particular reason to wait: `given_away_squares` is high and is the number
-        // most likely to move, and a level set from today's boards would describe
-        // boards we intend to stop making. `examples/sweep.rs` produces the numbers;
-        // the levels come after them.
+        // (settled 2026-10-22: levels are each game's to decide). The reason to wait has
+        // changed rather than gone away: `given_away_squares` is now zero by
+        // construction, and the number most likely to move is
+        // `digits_at_the_ends_per_mille`, which ADR 0021 leaves at about 480 and names as
+        // the next thing to improve. A level set from today's boards would describe
+        // boards we still intend to change. `examples/sweep.rs` produces the numbers; the
+        // levels come after them.
         band: None,
         replay: replay_of(&candidate.puzzle, &witness),
     })
@@ -133,9 +135,11 @@ pub fn report_for(
 
 /// The difficulty numbers, with the names this game gives them.
 ///
-/// `given_away_squares` is in here rather than left out, although it is the number
-/// this family is least proud of. A measurement nobody can see does not get fixed,
-/// and a report is where an audit would look for it.
+/// `given_away_squares` is in here rather than left out, although it was the number this
+/// family was least proud of. A measurement nobody can see does not get fixed, and a
+/// report is where an audit would look for it. The built boards of ADR 0021 hold it at
+/// zero, which is why `digits_at_the_ends_per_mille` is now in here beside it: that is
+/// the number the fix cost, and it is this family's next one to bring down.
 fn measurements_of(candidate: &Candidate) -> Vec<Measurement> {
     let f = &candidate.features;
     vec![
@@ -176,7 +180,15 @@ fn measurements_of(candidate: &Candidate) -> Vec<Measurement> {
             value: f.single_square_runs,
         },
         Measurement {
-            name: "squares_turned_black_while_generating",
+            name: "swap_rectangles",
+            value: f.swap_rectangles,
+        },
+        Measurement {
+            name: "digits_at_the_ends_per_mille",
+            value: f.digits_at_the_ends_per_mille,
+        },
+        Measurement {
+            name: "rounds_of_repair_while_generating",
             value: candidate.repairs,
         },
     ]

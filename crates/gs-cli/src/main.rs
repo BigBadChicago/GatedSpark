@@ -37,6 +37,7 @@ use gs_core::package::{RecordedReplay, Signer};
 use gs_core::schedule::{seal_schedule, Date, OpenedSchedule, Schedule, Scheduled};
 use gs_core::withdrawal::{seal_list, OpenedList, Reason, WithdrawalList, Withdrawn};
 use gs_crypto::{Ed25519Signer, Sha256, TrustedKeys};
+use gs_kakuro::construct as ka_construct;
 use gs_kakuro::generate as ka_generate;
 use gs_kakuro::publish as ka_publish;
 use gs_kakuro::solve as ka_solve;
@@ -74,14 +75,24 @@ gatedspark — make and keep verified puzzles
 
       Kakuro only:
       --size N       board size, N by N squares. Defaults to 7.
-      --black N      how much of the board starts black, in tenths of a percent.
-                     Defaults to 200. More black squares are added after that,
-                     one at a time, until the puzzle has a single answer.
+      --boards WHICH built or random. Defaults to built: the board is worked out
+                     so that no run is one square long, so nothing is handed to
+                     the player. random is the older method, which gives about
+                     380/1000 of the board away; it is slower up to 7x7 and much
+                     faster above it.
+      --longest-run N the longest run of white squares, in squares. Defaults to
+                     5, as a printed Kakuro does. Shorter runs mean more totals
+                     over the same squares, which is what makes a board pin down
+                     to one answer. Built boards only.
+      --black N      how much of the board is black, in tenths of a percent.
+                     Defaults to 350 for built boards and 200 for random ones.
       --given N      the most white squares that may sit alone in a run of one,
-                     in tenths of a percent. Defaults to 500. A square alone in
-                     a run has its digit named by the total, so this is a cap on
-                     how much of the board is handed to the player. This game has
-                     no difficulty levels yet either, and for the same reason.
+                     in tenths of a percent. A square alone in a run has its
+                     digit named by the total, so this is a cap on how much of
+                     the board is handed to the player. Defaults to 0 for built
+                     boards, which have none, and 500 for random ones. This game
+                     has no difficulty levels yet either, and for the same
+                     reason.
 
   gatedspark show    --store <dir> <puzzle name>
       Print one puzzle's validation report, read out of its signed package.
@@ -316,6 +327,8 @@ fn fill(args: &[String]) -> Result<(), String> {
         "timeout",
         "black",
         "given",
+        "longest-run",
+        "boards",
     ])?;
 
     let store = Store::open(args.required("store")?).map_err(|e| e.to_string())?;
@@ -337,7 +350,14 @@ fn fill(args: &[String]) -> Result<(), String> {
     let mut bands: Vec<&'static Band> = Vec::new();
     match family {
         "nonogram" => {
-            for flag in ["size", "enclosed", "black", "given"] {
+            for flag in [
+                "size",
+                "enclosed",
+                "black",
+                "given",
+                "longest-run",
+                "boards",
+            ] {
                 if args.get(flag).is_some() {
                     return Err(format!("--{flag} is not a nonogram flag"));
                 }
@@ -352,7 +372,7 @@ fn fill(args: &[String]) -> Result<(), String> {
                         .to_owned(),
                 );
             }
-            for flag in ["black", "given"] {
+            for flag in ["black", "given", "longest-run", "boards"] {
                 if args.get(flag).is_some() {
                     return Err(format!("--{flag} is for kakuro, not slitherlink"));
                 }
@@ -363,7 +383,7 @@ fn fill(args: &[String]) -> Result<(), String> {
                 return Err(
                     "--level is for nonogram. Kakuro has no difficulty levels yet, on \
                      purpose, and it has a particular reason to wait: the number most \
-                     likely to move is how much of the board it gives away."
+                     likely to move is how many of its digits are ones and nines."
                         .to_owned(),
                 );
             }
@@ -397,11 +417,42 @@ fn fill(args: &[String]) -> Result<(), String> {
     println!("store:  {}", store.root().display());
 
     if family == "kakuro" {
+        // Built boards by default, which is what makes `--given 0` the honest default:
+        // a built board has no run of one square, so it gives nothing away. See ADR
+        // 0021. `--longest-run` is the lever that matters, because each run is one
+        // adding-up rule.
+        let longest_run: usize = args.number("longest-run", 5usize)?;
+        // Built boards unless asked otherwise. The older random method is still reachable
+        // because it is still the better trade above 7 by 7: ADR 0021 measured the built
+        // method keeping 2 of 8 seeds at 9 by 9 against the random one's 34 of 40. It is
+        // asked for by name rather than fallen back to, because a method that quietly
+        // started handing a third of the board away would be the worst of both.
+        let (layout_from, given_default) = match args.get("boards").unwrap_or("built") {
+            "built" => (
+                ka_generate::LayoutFrom::Construction(ka_construct::Weave {
+                    longest_run,
+                    block_first_per_mille: args.number("black", 350u16)?,
+                    avoid_swaps: true,
+                }),
+                0u32,
+            ),
+            "random" => (ka_generate::LayoutFrom::RandomPattern, 500u32),
+            other => {
+                return Err(format!(
+                    "--boards takes built or random, not {other}.\n\
+                     built: no run of one square, so nothing is given away. Better up to \
+                     7x7.\n\
+                     random: the older method, which gives about 380/1000 of the board \
+                     away and is faster above 7x7."
+                ))
+            }
+        };
         let shape = ka_generate::Shape {
             width: args.number("size", 7u16)?,
             height: args.number("size", 7u16)?,
+            layout_from,
             block_per_mille: args.number("black", 200u16)?,
-            max_given_away_per_mille: args.number("given", 500u32)?,
+            max_given_away_per_mille: args.number("given", given_default)?,
         };
         return fill_kakuro(
             &store,
@@ -524,10 +575,26 @@ fn fill_kakuro(
     wanted: usize,
     seeds: std::ops::Range<u64>,
 ) -> Result<(), String> {
-    println!(
-        "board:  {}x{} squares, {}/1000 black to start, at most {}/1000 given away",
-        shape.width, shape.height, shape.block_per_mille, shape.max_given_away_per_mille
-    );
+    // Printed for every run, including the cheerful numbers, because a run that showed
+    // only the good ones is a run nobody fixes anything from. `given away` is zero by
+    // construction now, and `ones and nines` is the number that took its place as the
+    // one to bring down.
+    match shape.layout_from {
+        ka_generate::LayoutFrom::Construction(weave) => println!(
+            "board:  {}x{} squares, built, runs of 2 to {} squares, {}/1000 black, \
+             at most {}/1000 given away",
+            shape.width,
+            shape.height,
+            weave.longest_run,
+            weave.block_first_per_mille,
+            shape.max_given_away_per_mille
+        ),
+        ka_generate::LayoutFrom::RandomPattern => println!(
+            "board:  {}x{} squares, random pattern, {}/1000 black to start, \
+             at most {}/1000 given away",
+            shape.width, shape.height, shape.block_per_mille, shape.max_given_away_per_mille
+        ),
+    }
     println!();
 
     let mut stored = 0usize;
@@ -574,12 +641,14 @@ fn fill_kakuro(
                     Ok(id) => {
                         stored += 1;
                         println!(
-                            "  {} seed {this_seed}, {} white squares, {} turned black, \
-                             {}/1000 given away",
+                            "  {} seed {this_seed}, {} white squares, {} rounds of repair, \
+                             {}/1000 given away, {}/1000 ones and nines, {} swap rectangles",
                             id.to_hex(),
                             candidate.puzzle.layout.white_count(),
                             candidate.repairs,
-                            ka_generate::given_away_per_mille(&candidate.puzzle.layout)
+                            ka_generate::given_away_per_mille(&candidate.puzzle.layout),
+                            candidate.features.digits_at_the_ends_per_mille,
+                            candidate.features.swap_rectangles,
                         );
                     }
                     // Two seeds can produce the same board. Not an error.

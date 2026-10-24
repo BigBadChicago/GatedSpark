@@ -122,6 +122,27 @@ pub struct Features {
     /// worthless, so the generator limits them and the number is kept where anyone
     /// grading difficulty can see it.
     pub single_square_runs: u32,
+    /// Swap rectangles on the board.
+    ///
+    /// Four white squares at the corners of a rectangle, the two in each row sharing an
+    /// across run and the two in each column sharing a down run. Every one is a place the
+    /// board could have had a second answer, held shut only by the digits that ended up
+    /// in its corners. See `crate::construct`.
+    ///
+    /// Filled in by `crate::generate`, which is the only thing that knows the finished
+    /// layout; a bare [`solve`] leaves it zero. Carried because it is what this family's
+    /// uniqueness actually turns on, and because a reader grading difficulty should be
+    /// able to see it.
+    pub swap_rectangles: u32,
+    /// White squares holding a one or a nine, in tenths of a percent of the white
+    /// squares.
+    ///
+    /// The price of pinning the swap rectangles shut. A board of nothing but ones and
+    /// nines would be unique and dull, so this is the number to watch as the giveaway
+    /// number was before it, and it is in plain sight for the same reason: a number
+    /// nobody can see does not get improved. The older random method leaves about 200 in
+    /// 1000; the built one about 480.
+    pub digits_at_the_ends_per_mille: u32,
 }
 
 impl Features {

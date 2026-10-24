@@ -379,9 +379,14 @@ fn a_flag_that_belongs_to_the_other_game_is_refused_rather_than_ignored() {
     let said = stderr(&level_on_kakuro);
     assert!(said.contains("--level is for nonogram"), "{said}");
     assert!(
-        said.contains("gives away"),
+        said.contains("ones and nines"),
         "the refusal should say why this game in particular is waiting: {said}"
     );
+    // It used to say "gives away", and the change is the point: built boards give
+    // nothing away (ADR 0021), so the number this game is now waiting on is how many of
+    // its digits are ones and nines. A refusal naming the old number would be telling
+    // the user to wait for something that has already happened.
+    assert!(!said.contains("gives away"), "{said}");
 }
 
 #[test]
