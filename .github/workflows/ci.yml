@@ -181,6 +181,17 @@ jobs:
           GATEDSPARK_REQUIRE_SOLVER: "1"
           GATEDSPARK_SMT_SOLVER_2: cvc5
         run: cargo test -p gs-slitherlink --test solver_agreement -- --nocapture
+      # Kakuro's version of the same job. Its headline pair is a board that repeats a
+      # digit, which satisfies every total exactly and must come back `unsat`, and the
+      # same board with the no-repeats rule cut off our own query text, which must come
+      # back `sat`. This is also the job that earned the second solver its keep: CVC5
+      # refused every query for a board with a one-square run, because the encoder was
+      # writing a unary `+` that is not standard SMT-LIB2 and that Z3 accepts anyway.
+      - name: Solver agreement, Kakuro
+        env:
+          GATEDSPARK_REQUIRE_SOLVER: "1"
+          GATEDSPARK_SMT_SOLVER_2: cvc5
+        run: cargo test -p gs-kakuro --test solver_agreement -- --nocapture
       # M5's exit test, run for real: an empty folder becomes a signed, Z3-verified,
       # replayable puzzle, `show` reads its report back out of the signed bytes, and
       # `recheck` fails on a single flipped byte of the stored answer. Every other test

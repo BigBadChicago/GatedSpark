@@ -36,15 +36,19 @@
 //!
 //! * [`rules`] **checks** a board. It does not search and it decides nothing about
 //!   publication.
-//! * Only a real SMT solver, fed from [`Kakuro::dsl_rules`], produces a
+//! * [`smtlib`] turns a puzzle into text. It does not answer anything either, and it
+//!   **refuses** a rule it cannot encode rather than encoding what it can.
+//! * Only a real SMT solver, reading that text, produces a
 //!   [`gs_core::verification::Outcome`], and only an `Outcome` reaches the
 //!   publication gate.
 //!
-//! This crate is part one of four: the board and the rules, with no solver and no
-//! puzzle making. Those arrive in parts two and three.
+//! Parts one and two of four are here: the board and the rules, and the SMT-LIB2
+//! encoding that lets a real solver answer the two questions this platform asks of
+//! every puzzle. Making puzzles is part three.
 
 pub mod layout;
 pub mod rules;
+pub mod smtlib;
 pub mod totals;
 
 pub use rules::{Action, Kakuro};

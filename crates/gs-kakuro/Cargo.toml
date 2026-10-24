@@ -13,3 +13,7 @@ workspace = true
 
 [dev-dependencies]
 gs-core = { path = "../gs-core" }
+# The real solver runner, used by `tests/solver_agreement.rs`. Test-only on purpose:
+# a puzzle family must not be able to answer its own questions, and the browser must
+# never contain anything that can launch a program. See ADR 0009.
+gs-solver = { path = "../gs-solver" }
