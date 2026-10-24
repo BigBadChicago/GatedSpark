@@ -49,9 +49,11 @@ use common::{from_answer, layout};
 use gs_core::ruleset::Ruleset;
 use gs_core::state::{Cell, State};
 use gs_core::verification::Outcome;
+use gs_kakuro::generate::{batch, Shape};
 use gs_kakuro::layout::{Layout, WhiteId};
 use gs_kakuro::rules::Kakuro;
 use gs_kakuro::smtlib::{solvability_query, uniqueness_query};
+use gs_kakuro::solve::{solve, Budget, Solved};
 use gs_kakuro::totals::Totals;
 use gs_solver::{ExternalSolver, NoVerdict, TimeLimit};
 
@@ -552,4 +554,51 @@ fn our_rules_and_the_solver_agree_on_every_filling_of_a_small_board() {
             }
         },
     );
+}
+
+#[test]
+fn generated_puzzles_are_ones_a_real_solver_agrees_about() {
+    // The exit test for making puzzles: generated boards, not hand-written ones, with
+    // both solvers answering both questions.
+    //
+    // It matters more than the fixtures above, because the generator decides what to
+    // keep using **our** solver, and our solver's total deduction is a deliberate
+    // relaxation (see `crate::solve`). If that relaxation were wrong rather than
+    // merely weak, every puzzle this family makes would be suspect and nothing else in
+    // the repository would notice. A relaxation that only ever drops impossible
+    // digits cannot disagree with a real solver about how many answers there are, and
+    // this is where that claim is checked rather than argued.
+    let shape = Shape::middling(5, 5);
+    let (kept, report) = batch(0..6_u64, shape, Budget::default());
+    assert!(report.is_consistent(), "{report:?}");
+    assert!(!kept.is_empty(), "six seeds produced no puzzle at all");
+
+    with_solvers(&format!("the pipeline: {} puzzles", kept.len()), |solver| {
+        for candidate in &kept {
+            let seed = candidate.seed;
+            assert_eq!(
+                solver.ask(
+                    &solvability_query(&candidate.puzzle).expect("encodable"),
+                    "solvability of a generated puzzle"
+                ),
+                Answer::Sat,
+                "seed {seed}: the generator kept it, so it has an answer"
+            );
+            assert_eq!(
+                solver.ask(
+                    &uniqueness_query(&candidate.puzzle, &candidate.witness).expect("encodable"),
+                    "uniqueness of a generated puzzle"
+                ),
+                Answer::Unsat,
+                "seed {seed}: our own solver says exactly one answer, and {} must \
+                 agree -- a disagreement here is a fault in us, not in the puzzle",
+                solver.name
+            );
+            assert_eq!(
+                solve(&candidate.puzzle, Budget::default()).solved,
+                Solved::One,
+                "seed {seed}: and our own solver still says so on a fresh run"
+            );
+        }
+    });
 }

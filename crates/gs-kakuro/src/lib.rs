@@ -36,6 +36,9 @@
 //!
 //! * [`rules`] **checks** a board. It does not search and it decides nothing about
 //!   publication.
+//! * [`solve`] is a fast solver used as a generation filter and as the source of the
+//!   difficulty numbers. It produces no [`gs_core::verification::Outcome`] and there
+//!   is no path from its results to one.
 //! * [`smtlib`] turns a puzzle into text. It does not answer anything either, and it
 //!   **refuses** a rule it cannot encode rather than encoding what it can.
 //! * Only a real SMT solver, reading that text, produces a
@@ -46,9 +49,17 @@
 //! encoding that lets a real solver answer the two questions this platform asks of
 //! every puzzle. Making puzzles is part three.
 
+pub mod generate;
 pub mod layout;
+/// The workspace's deterministic generator, which lives in the core.
+///
+/// Re-exported under this path for the reason the other two families do it:
+/// generation reaches for `rng::Rng`, and the seeds recorded in a validation report
+/// have to mean the same thing in every family.
+pub use gs_core::rng;
 pub mod rules;
 pub mod smtlib;
+pub mod solve;
 pub mod totals;
 
 pub use rules::{Action, Kakuro};
