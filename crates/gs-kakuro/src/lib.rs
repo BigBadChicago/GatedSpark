@@ -52,6 +52,7 @@
 //! candidate into signed evidence, and [`hint`] works the next step out on the
 //! device. Playing one in a browser is `gs-web`'s half.
 
+pub mod check;
 pub mod clues;
 pub mod construct;
 pub mod generate;

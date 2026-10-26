@@ -184,6 +184,26 @@ pub struct Advice {
     pub hints_left: u8,
 }
 
+/// How a board is doing, for a player who asked.
+///
+/// The sentence comes from the game's own crate, where the counting is. Nothing here
+/// writes it, for the same reason nothing here decides whether a board is finished.
+///
+/// Unlike [`Advice`], **a check changes nothing**: it marks no square, costs no
+/// allowance, and can be asked for as often as a player likes. It reports only what a
+/// player could have worked out by reading their own board against its clues, so there
+/// is nothing to ration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    /// What to tell the player.
+    pub says: String,
+    /// Whether nothing is wrong. Not the same as finished: a blank board is clear.
+    pub clear: bool,
+    /// The places to mark on the board, so a player can see where to look. Empty when
+    /// nothing is wrong.
+    pub places: Vec<Place>,
+}
+
 /// Why there is no hint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoHint {
@@ -290,6 +310,21 @@ impl Session {
             Session::Nonogram(game) => game.hint(),
             Session::Slitherlink(game) => game.hint(),
             Session::Kakuro(game) => game.hint(),
+        }
+    }
+
+    /// Check the board as the player has it: what is already wrong, and how far along
+    /// it is.
+    ///
+    /// Counted on the device from the clues and the player's own marks, by the game's
+    /// own crate. Nothing is solved and nothing is compared against an answer, because
+    /// there is no answer here to compare against.
+    #[must_use]
+    pub fn check(&self) -> Checked {
+        match self {
+            Session::Nonogram(game) => game.check(),
+            Session::Slitherlink(game) => game.check(),
+            Session::Kakuro(game) => game.check(),
         }
     }
 
