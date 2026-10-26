@@ -22,7 +22,7 @@ use gs_slitherlink::board::{DotId, EdgeId, Geometry};
 use gs_slitherlink::loops::Shape;
 use gs_slitherlink::rules::{Action, Slitherlink, LINE, NO_LINE};
 
-use super::{why, Advice, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
+use super::{why, Advice, Checked, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// Which way a line runs.
@@ -322,6 +322,48 @@ impl Session {
             filled,
             hints_left: self.hints_left(),
         })
+    }
+
+    /// Check the board as the player has it.
+    ///
+    /// Free and unlimited, unlike a hint. It works nothing out: a square with more
+    /// sides drawn than its number allows, and a corner where three lines meet, are
+    /// both there to be counted. Lines the player has ruled out are not checked,
+    /// because the rules say ruling a line out is a note they keep for themselves.
+    #[must_use]
+    pub fn check(&self) -> Checked {
+        let found = gs_slitherlink::check::check(&self.rules, self.timeline.state());
+        // The four sides of each square with too many lines on it, so a player can see
+        // which square the sentence means. Which of the four is the wrong one is not
+        // decided, so all four are marked and none is singled out.
+        let geometry = self.rules.geometry();
+        let mut places = Vec::new();
+        for (column, row) in &found.too_many {
+            for (across, dot_column, dot_row) in [
+                (true, *column, *row),
+                (true, *column, row.saturating_add(1)),
+                (false, *column, *row),
+                (false, column.saturating_add(1), *row),
+            ] {
+                let edge = if across {
+                    geometry.across(dot_column, dot_row)
+                } else {
+                    geometry.down(dot_column, dot_row)
+                };
+                if edge.is_some() {
+                    places.push(Place::Line {
+                        across,
+                        column: dot_column,
+                        row: dot_row,
+                    });
+                }
+            }
+        }
+        Checked {
+            says: found.plainly(),
+            clear: found.is_clear(),
+            places,
+        }
     }
 
     /// How many hints are left on this puzzle.

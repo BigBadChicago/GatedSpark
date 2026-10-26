@@ -270,6 +270,75 @@ pub const BLACK: i32 = -1;
 /// black square in front of it.
 pub const NO_TOTAL: i32 = -1;
 
+/// Flatten places into the three-numbers-each list a page reads.
+///
+/// One copy, used by both [`Game::hint`] and [`Game::check`]. Two copies of this would
+/// be two numberings that agree until the day one of them is changed, and the page
+/// would then ring the wrong square for one of the two.
+fn flatten(places: &[Place]) -> Vec<i32> {
+    let mut out = Vec::new();
+    for place in places {
+        match place {
+            Place::Square { row, column } => {
+                out.push(SQUARE);
+                out.push(i32::from(*row));
+                out.push(i32::from(*column));
+            }
+            Place::Line {
+                across,
+                column,
+                row,
+            } => {
+                out.push(if *across {
+                    Side::Across as i32
+                } else {
+                    Side::Down as i32
+                });
+                out.push(i32::from(*row));
+                out.push(i32::from(*column));
+            }
+            Place::Digit { column, row } => {
+                out.push(DIGIT);
+                out.push(i32::from(*row));
+                out.push(i32::from(*column));
+            }
+        }
+    }
+    out
+}
+
+/// How a board is doing, ready for a page to show.
+///
+/// Flat for the same reason [`Hinted`] is: a sentence, and a list of numbers in threes.
+#[wasm_bindgen]
+pub struct Checked {
+    says: String,
+    clear: bool,
+    places: Vec<i32>,
+}
+
+#[wasm_bindgen]
+impl Checked {
+    /// What to tell the player. The game's own sentence.
+    #[must_use]
+    pub fn says(&self) -> String {
+        self.says.clone()
+    }
+
+    /// Whether nothing is wrong. Not the same as finished: a blank board is clear.
+    #[must_use]
+    pub fn clear(&self) -> bool {
+        self.clear
+    }
+
+    /// Everywhere to mark, three numbers at a time, numbered exactly as
+    /// [`Hinted::places`] numbers them. Empty when nothing is wrong.
+    #[must_use]
+    pub fn places(&self) -> Vec<i32> {
+        self.places.clone()
+    }
+}
+
 /// One hint, ready for a page to show.
 ///
 /// Flat on purpose: a sentence, and a list of numbers in threes. Making this a shape a
@@ -413,34 +482,7 @@ impl Game {
                 // two coordinates. A page reads it in threes, the way it already reads
                 // `line_places`. Carrying a list of objects across would mean a page
                 // holding a shape from in here.
-                let mut places = Vec::new();
-                for place in &advice.filled {
-                    match place {
-                        Place::Square { row, column } => {
-                            places.push(SQUARE);
-                            places.push(i32::from(*row));
-                            places.push(i32::from(*column));
-                        }
-                        Place::Line {
-                            across,
-                            column,
-                            row,
-                        } => {
-                            places.push(if *across {
-                                Side::Across as i32
-                            } else {
-                                Side::Down as i32
-                            });
-                            places.push(i32::from(*row));
-                            places.push(i32::from(*column));
-                        }
-                        Place::Digit { column, row } => {
-                            places.push(DIGIT);
-                            places.push(i32::from(*row));
-                            places.push(i32::from(*column));
-                        }
-                    }
-                }
+                let places = flatten(&advice.filled);
                 Ok(Hinted {
                     says: advice.says,
                     places,
@@ -448,6 +490,28 @@ impl Game {
                 })
             }
             Err(why) => Err(JsError::new(&why.to_string())),
+        }
+    }
+
+    /// Check the board as the player has it: what is already wrong, and how far along
+    /// it is.
+    ///
+    /// **Nothing changes.** No square is marked, no allowance is spent, and it can be
+    /// asked for as often as a player likes. That is the difference between this and
+    /// [`Game::hint`]: a hint works part of the puzzle out and tells the player
+    /// something new, so there are three of them; a check only counts what is already
+    /// in front of them, so there is no reason to ration it.
+    ///
+    /// Not a thrown error when something is wrong: being wrong part-way through is the
+    /// ordinary state of a puzzle being played, and a page should show the sentence
+    /// either way.
+    #[must_use]
+    pub fn check(&self) -> Checked {
+        let found = self.session.check();
+        Checked {
+            says: found.says,
+            clear: found.clear,
+            places: flatten(&found.places),
         }
     }
 

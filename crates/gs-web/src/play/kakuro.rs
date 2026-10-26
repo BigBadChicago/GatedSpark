@@ -43,7 +43,7 @@ use gs_kakuro::layout::{Along, Layout, RunId, WhiteId};
 use gs_kakuro::rules::{Action, Kakuro};
 use gs_kakuro::totals::{LEAST_DIGIT, MOST_DIGIT};
 
-use super::{why, Advice, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
+use super::{why, Advice, Checked, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// A total, and which way the run it belongs to goes.
@@ -372,6 +372,27 @@ impl Session {
             filled,
             hints_left: self.hints_left(),
         })
+    }
+
+    /// Check the board as the player has it.
+    ///
+    /// Free and unlimited, unlike a hint. It works nothing out: a digit written twice
+    /// in one run, a run already past its total, and a full run that does not add up
+    /// are all there to be counted from what the player wrote.
+    #[must_use]
+    pub fn check(&self) -> Checked {
+        let found = gs_kakuro::check::check(&self.rules, self.timeline.state());
+        // Which squares belong to a faulty run is the layout's to say, not this
+        // session's to work out from a count.
+        let places = gs_kakuro::check::squares_to_mark(&self.rules, &found)
+            .into_iter()
+            .map(|(column, row)| Place::Digit { column, row })
+            .collect();
+        Checked {
+            says: found.plainly(),
+            clear: found.is_clear(),
+            places,
+        }
     }
 
     /// How many hints are left on this puzzle.

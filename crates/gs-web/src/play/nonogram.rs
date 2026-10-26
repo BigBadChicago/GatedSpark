@@ -10,7 +10,7 @@ use gs_core::state::{Cell, State};
 use gs_core::timeline::Timeline;
 use gs_nonogram::rules::{mark_of, Action, Nonogram, EMPTY, FILLED};
 
-use super::{why, Advice, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
+use super::{why, Advice, Checked, HintSize, NoChange, NoHint, Place, HINTS_PER_PUZZLE};
 use crate::Playable;
 
 /// What a player can do to a square.
@@ -219,6 +219,46 @@ impl Session {
             filled,
             hints_left: self.hints_left(),
         })
+    }
+
+    /// Check the board as the player has it.
+    ///
+    /// Free and unlimited, unlike a hint. It works nothing out: every line it names is
+    /// one whose filled squares already cannot match its numbers, which a player could
+    /// have seen by counting. Crossing out is not checked, because the rules say a
+    /// crossed-out square is a note the player keeps for themselves.
+    #[must_use]
+    pub fn check(&self) -> Checked {
+        let found = gs_nonogram::check::check(&self.rules, self.timeline.state());
+        let width = self.rules.clues.dims.width;
+        let height = self.rules.clues.dims.height;
+        // The whole line is marked, not a square in it. Which square is wrong is not
+        // decided, and guessing one could send a player to undo the square they had
+        // right.
+        let mut places = Vec::new();
+        for line in &found.cannot_work {
+            match line {
+                gs_nonogram::hint::Because::Row(row) => {
+                    for column in 0..width {
+                        places.push(Place::Square { row: *row, column });
+                    }
+                }
+                gs_nonogram::hint::Because::Column(column) => {
+                    for row in 0..height {
+                        places.push(Place::Square {
+                            row,
+                            column: *column,
+                        });
+                    }
+                }
+                gs_nonogram::hint::Because::TheWholePuzzle => {}
+            }
+        }
+        Checked {
+            says: found.plainly(),
+            clear: found.is_clear(),
+            places,
+        }
     }
 
     /// How many hints are left on this puzzle.

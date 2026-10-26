@@ -24,6 +24,7 @@
 //! Treating a fast heuristic as a correctness oracle is the mistake the whole
 //! platform is arranged to avoid. WFC gets the same treatment in M3.
 
+pub mod check;
 pub mod clues;
 pub mod difficulty;
 pub mod generate;

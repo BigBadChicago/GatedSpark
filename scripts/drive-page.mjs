@@ -143,7 +143,7 @@ await page.waitForSelector('#game:not([hidden])', { timeout: 20000 });
 // a visitor sees.
 const arrived = await page.evaluate(() => ({
   family: window.gatedspark.family(),
-  games: document.getElementById('game-pick').options.length,
+  games: window.gatedspark.games().length,
 }));
 console.log('arrived at ' + JSON.stringify(arrived));
 if (arrived.games < 1) await fail('the page offered no games, so it has no schedule', 'no-schedule');
@@ -171,7 +171,7 @@ const details = await page.evaluate(() => ({
   rowClues: document.querySelectorAll('th.row-clue').length,
   solvedShowing: !document.getElementById('solved').hidden,
   moves: document.getElementById('moves').textContent,
-  games: document.getElementById('game-pick').options.length,
+  games: window.gatedspark.games().length,
   days: [...document.getElementById('day-pick').options].map((o) => o.textContent),
   name: document.getElementById('day-pick').value,
   todayLine: document.getElementById('today-line').textContent,
@@ -526,10 +526,101 @@ if (oneShort.page || oneShort.core) await fail('still said solved with a square 
 await page.evaluate(() => window.gatedspark.undo());
 if (!await page.evaluate(() => window.gatedspark.isSolved())) await fail('undo did not get back to solved', 'undo-solved');
 
+// Checking your work, on the real page.
+//
+// Two things to prove here that no unit test can: that the button reaches the core at
+// all, and that what it says changes when the board does. The board is solved at this
+// point, so a check has to be clear; then one square is changed and the same button has
+// to find it.
+const checkWhenRight = await page.evaluate(() => {
+  window.gatedspark.check();
+  return {
+    said: window.gatedspark.checkSaid(),
+    marked: window.gatedspark.markedWrong(),
+    announced: window.gatedspark.checkIsAnnounced(),
+    moves: window.gatedspark.movesMade(),
+  };
+});
+console.log('checked a finished board ' + JSON.stringify(checkWhenRight));
+if (!checkWhenRight.said) await fail('the check button said nothing at all', 'check');
+if (checkWhenRight.marked !== 0) await fail('a finished board was marked wrong', 'check');
+if (!checkWhenRight.announced) await fail('what the check found is never read aloud', 'check');
+await page.screenshot({ path: OUT + '/checked-right.png', fullPage: true });
+
+// Now break it: cross out a square that was filled in. Crossing out is a note to
+// yourself and nothing checks it, so this must still be clear — the rule the owner
+// settled, driven in a browser.
+const crossedOut = await page.evaluate(() => {
+  const filled = document.querySelector('td.square[data-mark="0"]');
+  const row = Number(filled.dataset.row);
+  const column = Number(filled.dataset.column);
+  window.gatedspark.tap(row, column);
+  window.gatedspark.tap(row, column);
+  window.gatedspark.check();
+  return { said: window.gatedspark.checkSaid(), marked: window.gatedspark.markedWrong(), row, column };
+});
+console.log('checked with a square crossed out ' + JSON.stringify(crossedOut));
+if (crossedOut.marked !== 0) {
+  await fail('crossing a square out was called a mistake: ' + crossedOut.said, 'check');
+}
+
+// And a real mistake: fill a square that the finished board had crossed out or blank,
+// in a row that was already right. The row now has one filled square too many.
+const reallyWrong = await page.evaluate(() => {
+  const blank = document.querySelector('td.square:not([data-mark="0"])');
+  const row = Number(blank.dataset.row);
+  const column = Number(blank.dataset.column);
+  while (Number(blank.dataset.mark) !== 0) window.gatedspark.tap(row, column);
+  window.gatedspark.check();
+  return {
+    said: window.gatedspark.checkSaid(),
+    marked: window.gatedspark.markedWrong(),
+    squares: window.gatedspark.squaresMarkedWrong().length,
+    row,
+  };
+});
+console.log('checked with a square too many ' + JSON.stringify(reallyWrong));
+if (reallyWrong.marked === 0) {
+  await fail('a row with a square too many was called fine: ' + reallyWrong.said, 'check-missed');
+}
+await page.screenshot({ path: OUT + '/checked-wrong.png', fullPage: true });
+
+// A move clears the marks, because they describe a board that has moved on.
+const afterAMove = await page.evaluate(() => {
+  window.gatedspark.undo();
+  return { marked: window.gatedspark.markedWrong(), said: window.gatedspark.checkSaid() };
+});
+if (afterAMove.marked !== 0) await fail('the marks outlived the board they described', 'check');
+if (!afterAMove.said) await fail('the sentence went away with the marks', 'check');
+
+// The menu, which now holds everything that is not the board.
+await page.evaluate(() => window.gatedspark.openMenu());
+await page.waitForFunction(() => window.gatedspark.menuIsOpen(), undefined, { timeout: 5000 });
+const menu = await page.evaluate(() => ({
+  open: window.gatedspark.menuIsOpen(),
+  says: window.gatedspark.menuSaysItIsOpen(),
+  rules: window.gatedspark.rulesTitle(),
+  saved: window.gatedspark.savedLine(),
+  fingerprint: window.gatedspark.fingerprint(),
+}));
+console.log('the menu ' + JSON.stringify(menu));
+if (menu.says !== 'true') await fail('the menu button does not say the menu is open', 'menu');
+if (!menu.fingerprint) await fail('what the page checked is not in the menu', 'menu');
+await page.screenshot({ path: OUT + '/menu.png', fullPage: true });
+await page.evaluate(() => window.gatedspark.closeMenu());
+if (await page.evaluate(() => window.gatedspark.menuIsOpen())) {
+  await fail('the menu will not close', 'menu');
+}
+
 // A second puzzle, to prove switching rebuilds the grid and forgets the old game.
+// The day picker lives in the menu now, so it has to be opened first. That is the
+// whole point of the menu: everything that is not the board is behind one button.
 const second = await page.evaluate(() => document.getElementById('day-pick').options[1]?.value);
 if (second) {
+  await page.evaluate(() => window.gatedspark.openMenu());
+  await page.waitForFunction(() => window.gatedspark.menuIsOpen(), undefined, { timeout: 5000 });
   await page.selectOption('#day-pick', second);
+  await page.evaluate(() => window.gatedspark.closeMenu());
   await page.waitForFunction((n) => document.getElementById('fingerprint').textContent.startsWith(n.slice(0, 8)), second, { timeout: 10000 });
   const switched = await page.evaluate(() => ({
     squares: document.querySelectorAll('td.square').length,

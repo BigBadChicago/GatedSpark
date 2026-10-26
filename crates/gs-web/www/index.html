@@ -10,35 +10,66 @@
      also means it works with no signal, like everything else here. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231f6f5c'/%3E%3Cg fill='%23fbfbf9'%3E%3Crect x='3' y='3' width='4' height='4'/%3E%3Crect x='9' y='9' width='4' height='4'/%3E%3C/g%3E%3C/svg%3E">
 <style>
+  /* The look, settled with the project owner on 2026-10-25 and built on 2026-10-26.
+     Five things decide it, and every rule below serves one of them:
+
+     1. One menu holds the rules, the saving and the checks. The main screen is the
+        board and nothing else.
+     2. The three actions are pictures with a small word under each.
+     3. The three games sit on a bar fixed at the bottom, in reach of a thumb.
+     4. No card and no box behind the board. The grid sits on the page itself.
+     5. The accent colour appears twice and nowhere else: the game you are on, and the
+        square you are on. Not on a filled button, and not round a line of text. */
   :root {
-    --ink: #17171a;
-    --paper: #fbfbf9;
-    --line: #d2d0c8;
-    --line-strong: #9a978d;
-    --filled: #17171a;
-    --empty-mark: #a8a49a;
+    --paper: #faf8f3;
+    --ink: #1d1c19;
+    --muted: #77736a;
+    --line: #d6d2c6;
+    --line-strong: #989385;
+    --filled: #1d1c19;
+    --empty-mark: #b0ab9f;
     --accent: #1f6f5c;
+    --on-accent: #faf8f3;
     --warn: #8c2f1f;
-    --muted: #6b6860;
-    --tap: 2.1rem;
+    --warn-wash: #f2e3df;
+    --cell-bg: transparent;
+    --kakuro-black: #e2ddd0;
+    --kakuro-head: #efebe0;
+    --sheet: #ffffff;
+    --veil: rgba(20, 18, 14, .45);
+    /* The squares shrink so a board fits a phone without sliding sideways. A board a
+       finger cannot reach the edge of is not a board on a phone. */
+    --tap: clamp(1.5rem, 7.2vw, 2.2rem);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --ink: #ecebe6;
-      --paper: #16161a;
-      --line: #3a3a42;
-      --line-strong: #65646e;
-      --filled: #ecebe6;
-      --empty-mark: #6b6a74;
-      --accent: #58b79c;
-      --warn: #e08a76;
-      --muted: #9a98a2;
+      --paper: #121318;
+      --ink: #e9eaee;
+      --muted: #8d919c;
+      --line: #2e3139;
+      --line-strong: #585d6a;
+      --filled: #e9eaee;
+      --empty-mark: #6b707d;
+      --accent: #3fc4a4;
+      --on-accent: #08201b;
+      --warn: #ef8a76;
+      --warn-wash: #3a211c;
+      /* The white squares are lifted rather than the black ones pushed further down.
+         Darkening the blacks on a dark page leaves two shades nobody can tell apart,
+         which is how the Kakuro board came out unreadable twice before this. */
+      --cell-bg: #1d212a;
+      --kakuro-black: #08090d;
+      --kakuro-head: #272c37;
+      --sheet: #1b1e26;
+      --veil: rgba(0, 0, 0, .6);
     }
   }
   :root[data-theme="dark"] {
-    --ink: #ecebe6; --paper: #16161a; --line: #3a3a42; --line-strong: #65646e;
-    --filled: #ecebe6; --empty-mark: #6b6a74; --accent: #58b79c; --warn: #e08a76;
-    --muted: #9a98a2;
+    --paper: #121318; --ink: #e9eaee; --muted: #8d919c; --line: #2e3139;
+    --line-strong: #585d6a; --filled: #e9eaee; --empty-mark: #6b707d;
+    --accent: #3fc4a4; --on-accent: #08201b; --warn: #ef8a76; --warn-wash: #3a211c;
+    --cell-bg: #1d212a; --kakuro-black: #08090d; --kakuro-head: #272c37;
+    --sheet: #1b1e26; --veil: rgba(0, 0, 0, .6);
   }
 
   * { box-sizing: border-box; }
@@ -47,16 +78,38 @@
     background: var(--paper);
     color: var(--ink);
     font: 1rem/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    padding: 1rem 16px 3rem;
+    /* Room at the bottom for the bar of games, so it never covers the board. */
+    padding: 0 0 calc(5.5rem + env(safe-area-inset-bottom));
     -webkit-text-size-adjust: 100%;
   }
-  main { max-width: 44rem; margin: 0 auto; }
+  main { max-width: 34rem; margin: 0 auto; padding: 0 14px; }
 
-  h1 { font-size: 1.25rem; margin: 0 0 .15rem; letter-spacing: -.01em; }
-  .tagline { color: var(--muted); font-size: .85rem; margin: 0 0 1.25rem; }
+  /* ---- the one line at the top ---------------------------------------- */
+  .top { display: flex; align-items: center; gap: .6rem; height: 3.2rem; }
+  h1 { font-size: .95rem; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .top .day { margin-left: auto; color: var(--muted); font-size: .85rem; }
 
-  /* ---- the board ---------------------------------------------------- */
-  .board-scroll { overflow-x: auto; padding-bottom: .5rem; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.75rem; height: 2.75rem; flex: none;
+    background: none; border: 0; border-radius: .5rem; cursor: pointer; color: var(--ink);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .icon-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  .icon-btn svg {
+    width: 1.3rem; height: 1.3rem; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .menu-btn { margin-right: -.5rem; }
+
+  /* ---- which puzzle this is ------------------------------------------- */
+  .head { margin: .3rem 0 1rem; }
+  .head h2 { font-size: 1.05rem; margin: 0; }
+  .head p { margin: .1rem 0 0; color: var(--muted); font-size: .82rem; }
+
+  /* ---- the board, sitting on the page itself -------------------------- */
+  .board-scroll { display: flex; justify-content: center; overflow-x: auto; }
+
   table.board { border-collapse: collapse; margin: 0 auto; }
   table.board th, table.board td { padding: 0; }
 
@@ -64,7 +117,7 @@
   th.col-clue {
     vertical-align: bottom;
     font-size: .68rem;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--muted);
     line-height: 1.15;
     padding-bottom: .25rem;
@@ -74,7 +127,7 @@
   th.row-clue {
     text-align: right;
     font-size: .72rem;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--muted);
     padding-right: .4rem;
     white-space: nowrap;
@@ -86,7 +139,7 @@
     width: var(--tap);
     height: var(--tap);
     border: 1px solid var(--line);
-    background: transparent;
+    background: var(--cell-bg);
     cursor: pointer;
     position: relative;
     -webkit-tap-highlight-color: transparent;
@@ -108,23 +161,25 @@
   }
   td.square[data-mark="1"]::before { transform: rotate(45deg); }
   td.square[data-mark="1"]::after { transform: rotate(-45deg); }
-  td.square:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+  /* The square you are on. This is the second and last place the accent is used. */
+  td.square:focus-visible, td.kcell.white:focus-visible {
+    outline: 3px solid var(--accent); outline-offset: -3px;
+  }
   /* The square a hint is pointing at. A ring inside the square rather than a fill,
      because a fill is what "filled in" means here and the player has not filled it. */
   td.square[data-hint="yes"] { outline: 3px dashed var(--accent); outline-offset: -3px; }
+  /* Where a check found something wrong. Warn, never the accent: the accent means
+     "you are here", and a square cannot mean two things. */
+  td.square[data-wrong="yes"] { background-color: var(--warn-wash); }
+  td.square[data-wrong="yes"][data-mark="0"] { background-color: var(--filled); box-shadow: inset 0 0 0 2px var(--warn); }
 
-  /* ---- the Kakuro board ---------------------------------------------
-     Its own table, not the Nonogram one with different classes on it. Two reasons.
-     The grid carries black squares that are part of the puzzle rather than a state a
-     player reached, so there is nothing for a tap to do to them; and a white square
-     shows a digit the player chose, so it holds text rather than a fill. Trying to
-     make one table do both would have meant a square whose meaning depended on which
-     game was loaded, which is the mistake `Place::Digit` exists to avoid on the other
-     side of the boundary. */
+  /* ---- the Kakuro board ----------------------------------------------
+     Its own table, not the Nonogram one with different classes on it. The grid
+     carries black squares that are part of the puzzle rather than a state a player
+     reached, and a white square shows a digit the player chose, so it holds text
+     rather than a fill. */
   table.kboard { border-collapse: collapse; margin: 0 auto; }
   table.kboard th, table.kboard td { padding: 0; }
-  /* The totals for runs that start against the rim, drawn in the margin because there
-     is no black square in front of them to hold a number. */
   table.kboard th.rim {
     font-size: .72rem;
     font-weight: 700;
@@ -140,6 +195,7 @@
     width: var(--tap);
     height: var(--tap);
     border: 1px solid var(--line-strong);
+    background: var(--cell-bg);
     position: relative;
     text-align: center;
     -webkit-tap-highlight-color: transparent;
@@ -147,27 +203,19 @@
   }
   /* A black square that carries at least one total. The diagonal separates the two
      numbers and is drawn as a background rather than as a border or an extra element,
-     so it cannot be mistaken for a grid line and nothing inside the square has to move
-     out of its way. */
+     so it cannot be mistaken for a grid line. */
   td.kcell.black.heads {
     background-image: linear-gradient(
       to bottom right,
       transparent calc(50% - .5px), var(--line-strong) calc(50% - .5px),
       var(--line-strong) calc(50% + .5px), transparent calc(50% + .5px)
     );
-    background-color: color-mix(in srgb, var(--line-strong) 22%, transparent);
+    background-color: var(--kakuro-head);
   }
-  /* A black square that carries nothing is drawn solid, with no diagonal.
-     In a printed Kakuro a diagonal means "two runs start here", so drawing one on a
-     square with no numbers on it says a run starts there whose total is missing. The
-     first screenshot of this page had a diagonal on every black square, which is a
-     board that reads as broken to anybody who knows the game. */
-  td.kcell.black.blank {
-    background-color: color-mix(in srgb, var(--line-strong) 70%, var(--paper));
-  }
-  /* The across total above the diagonal, the down total below it. That is where a
-     printed Kakuro puts them, and putting them anywhere else would make a familiar
-     puzzle unreadable to somebody who already knows the game. */
+  /* A black square that carries nothing is drawn solid, with no diagonal. In a printed
+     Kakuro a diagonal means "two runs start here", so drawing one on a square with no
+     numbers on it says a run starts there whose total is missing. */
+  td.kcell.black.blank { background-color: var(--kakuro-black); }
   td.kcell .across-total,
   td.kcell .down-total {
     position: absolute;
@@ -180,102 +228,23 @@
   td.kcell .down-total { bottom: .12rem; left: .16rem; }
 
   td.kcell.white {
-    background: transparent;
     cursor: text;
     font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--filled);
+    font-weight: 700;
+    color: var(--ink);
   }
-  td.kcell.white:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
   td.kcell.white[data-hint="yes"] { outline: 3px dashed var(--accent); outline-offset: -3px; }
   /* A run with a digit in it twice. Marked on the squares of that run, because
      "somewhere on the board there is a repeat" is not help. The core decides which
      runs these are; the page only draws them. */
-  td.kcell.white.repeat { background: color-mix(in srgb, var(--warn) 18%, transparent); }
-
-  /* ---- controls ------------------------------------------------------ */
-  .controls { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0 .5rem; }
-  button {
-    font: inherit;
-    font-weight: 600;
-    color: var(--ink);
-    background: transparent;
-    border: 1.5px solid var(--line-strong);
-    border-radius: .45rem;
-    padding: .5rem .9rem;
-    min-height: 2.75rem;
-    cursor: pointer;
-  }
-  button:disabled { opacity: .4; cursor: default; }
-  button:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
-  select {
-    font: inherit; color: var(--ink); background: transparent;
-    border: 1.5px solid var(--line-strong); border-radius: .45rem;
-    padding: .5rem; min-height: 2.75rem; max-width: 100%;
-  }
-
-  .count { color: var(--muted); font-size: .85rem; align-self: center; }
-
-  .saved {
-    margin: 1rem 0;
-    padding: .75rem .9rem;
-    border: 1px solid var(--line);
-    border-radius: .5rem;
-  }
-  .saved .controls { margin: .6rem 0 0; }
-  .saved-line { margin: 0; font-size: .85rem; color: var(--muted); }
-  button[aria-pressed="true"] {
-    border-color: var(--warn);
-    color: var(--warn);
-  }
-
-  /* ---- messages ------------------------------------------------------ */
-  .solved {
-    margin: 1rem 0;
-    padding: .8rem 1rem;
-    border: 2px solid var(--accent);
-    border-radius: .5rem;
-    color: var(--accent);
-    font-weight: 700;
-  }
-  .refused {
-    margin: 1rem 0;
-    padding: .8rem 1rem;
-    border: 2px solid var(--warn);
-    border-radius: .5rem;
-    color: var(--warn);
-  }
-  .note { color: var(--muted); font-size: .85rem; min-height: 1.5em; margin: .25rem 0 0; }
-
-  /* ---- how to play --------------------------------------------------- */
-  /* A fold rather than a wall of text. It starts open, because somebody meeting the
-     game for the first time should not have to go looking for the rules, and it
-     remembers being closed, because somebody who already knows them should not have to
-     close it every day. */
-  .rules {
-    margin: 0 0 1rem;
-    border: 1px solid var(--line);
-    border-radius: .5rem;
-    /* No fill: the border alone separates it, and a second panel colour beside the
-       saved panel would look like two different kinds of thing. */
-  }
-  .rules > summary {
-    cursor: pointer;
-    padding: .6rem .9rem;
-    font-weight: 600;
-    list-style-position: inside;
-  }
-  .rules > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-  .rules ul { margin: 0; padding: 0 .9rem .9rem 2rem; }
-  .rules li { margin: .35rem 0; font-size: .9rem; line-height: 1.45; }
+  td.kcell.white.repeat,
+  td.kcell.white[data-wrong="yes"] { background: var(--warn-wash); }
 
   /* ---- the loop game ------------------------------------------------ */
   /* Drawn as one picture rather than a table of squares, because what a player marks
      here is the lines between the dots, and a table has no place to put those. */
-  /* Fills the width it is given, up to a size where the dots stop being far apart.
-     A board drawn at its natural size is a board a finger cannot hit on a phone. */
   #loop { width: 100%; max-width: 26rem; height: auto; touch-action: manipulation; }
-  #loop .dot { fill: var(--muted); }
+  #loop .dot { fill: var(--line-strong); }
   #loop .number { fill: var(--ink); font-size: 13px; text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
   #loop .number[data-met="yes"] { fill: var(--muted); }
   /* The wide invisible strip over each line, so a finger has something to hit. */
@@ -287,65 +256,148 @@
      line: a faint line and a drawn line are the two things a player must never mix up. */
   #loop .ruled { stroke: var(--warn); stroke-width: 2.5; stroke-linecap: round; display: none; pointer-events: none; }
   #loop .edge[data-drawn="1"] .ruled { display: inline; }
-  #loop .edge:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  /* The keyboard's place on a line board, drawn along the line itself.
+     Not an outline: an outline is drawn round the whole group, and the group contains
+     the wide invisible strip a finger aims at, so an outline comes out as a box two
+     squares across sitting on top of the numbers. Painting the strip instead puts the
+     mark exactly where the line is. */
+  #loop .edge:focus-visible { outline: none; }
+  #loop .edge:focus-visible .grab { stroke: var(--accent); stroke-opacity: .3; }
   #loop .pointer { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 3 2.5; display: none; pointer-events: none; }
   #loop .edge[data-hint="yes"] .pointer { display: inline; }
-  .shape { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+  #loop .edge[data-wrong="yes"] .line { stroke: var(--warn); }
+  #loop .edge[data-wrong="yes"] .grab { stroke: var(--warn-wash); }
 
-  /* ---- hints ---------------------------------------------------------- */
-  /* A hint gets its own line, not the status line: the status line is wiped by the next
-     thing that happens, and a hint is something a player wants to read twice. */
-  .hint-said {
-    margin: .6rem 0 0;
-    padding: .7rem .9rem;
-    border: 1px solid var(--accent);
-    border-radius: .5rem;
-    color: var(--accent);
+  .status { text-align: center; color: var(--muted); font-size: .82rem; margin: 1rem 0 0; }
+
+  /* ---- the three actions, as pictures --------------------------------- */
+  /* Each one carries its name for a screen reader, and shows the same word under the
+     picture at a readable size. A lightbulb on its own is a guess for anybody meeting
+     the game for the first time, and plain language is the rule for this project. */
+  .actions { display: flex; justify-content: center; gap: 1.2rem; margin: 1.1rem 0 0; }
+  .act {
+    display: flex; flex-direction: column; align-items: center; gap: .15rem;
+    background: none; border: 0; cursor: pointer; color: var(--ink);
+    padding: .4rem .2rem; min-width: 3.2rem; font: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .act svg {
+    width: 1.45rem; height: 1.45rem; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .act span { font-size: .7rem; color: var(--muted); }
+  .act:disabled { opacity: .35; cursor: default; }
+  .act:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: .4rem; }
+
+  .counts { text-align: center; color: var(--muted); font-size: .75rem; margin: .5rem 0 0; }
+  /* Non-breaking spaces: ordinary ones round a dot in generated content
+     collapse against the whitespace between the two spans and the dot ends up
+     against the next word. */
+  .counts span + span::before { content: "\00a0\00b7\00a0"; }
+
+  /* What a hint or a check said. A thin rule beside the words, not a coloured box:
+     the accent has two jobs on this page and this is neither of them. */
+  .said {
+    margin: 1rem 0 0;
+    padding-left: .8rem;
+    border-left: 2px solid var(--line-strong);
     font-size: .9rem;
   }
-  [hidden] { display: none !important; }
+  .said.wrong { border-left-color: var(--warn); }
+  .note { color: var(--muted); font-size: .8rem; margin: 1rem 0 0; min-height: 1.5em; }
 
-  /* ---- what the page checked ---------------------------------------- */
-  .trust {
-    margin-top: 2rem;
-    border-top: 1px solid var(--line);
-    padding-top: 1rem;
-    font-size: .8rem;
-    color: var(--muted);
+  .solved {
+    margin: 1rem 0 0;
+    padding-left: .8rem;
+    border-left: 2px solid var(--accent);
+    font-weight: 700;
   }
-  .trust h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .5rem; }
-  .trust dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .75rem; margin: 0; }
-  .trust dt { font-weight: 600; }
-  .trust dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .refused {
+    margin: 1rem 0;
+    padding: .8rem 1rem;
+    border: 2px solid var(--warn);
+    border-radius: .5rem;
+    color: var(--warn);
+  }
+
+  /* ---- the bar of games, at the bottom -------------------------------- */
+  .games {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    display: flex; justify-content: center; gap: .25rem;
+    background: var(--paper); border-top: 1px solid var(--line);
+    padding: .3rem 10px calc(.3rem + env(safe-area-inset-bottom));
+  }
+  .game-tab {
+    flex: 1 1 0; max-width: 8rem;
+    display: flex; flex-direction: column; align-items: center; gap: .1rem;
+    background: none; border: 0; cursor: pointer; color: var(--muted);
+    padding: .4rem .2rem; font: inherit; font-size: .72rem; font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .game-tab svg { width: 1.35rem; height: 1.35rem; fill: none; stroke: currentColor; stroke-width: 1.6; }
+  /* The game you are on. The first of the accent's two jobs. */
+  .game-tab[aria-current="page"] { color: var(--accent); }
+  .game-tab:focus-visible { outline: 3px solid var(--accent); outline-offset: -2px; border-radius: .4rem; }
+
+  /* ---- the one menu holding everything else --------------------------- */
+  .veil { position: fixed; inset: 0; background: var(--veil); z-index: 8; }
+  .sheet {
+    position: fixed; z-index: 9; right: 0; top: 0; bottom: 0; width: min(22rem, 92vw);
+    background: var(--sheet); border-left: 1px solid var(--line);
+    padding: 1rem 1.1rem 2rem; overflow-y: auto;
+  }
+  .sheet-top { display: flex; align-items: center; margin-bottom: .4rem; }
+  .sheet-top h2 { font-size: 1rem; margin: 0; }
+  .sheet-top .icon-btn { margin-left: auto; margin-right: -.5rem; }
+  .sheet section { padding: 1rem 0; border-top: 1px solid var(--line); }
+  .sheet h3 { font-size: .9rem; margin: 0 0 .5rem; }
+  .sheet .small { color: var(--muted); font-size: .82rem; margin: 0 0 .6rem; }
+  .sheet .stack { display: grid; gap: .4rem; }
+  .sheet button.plain,
+  .sheet select {
+    font: inherit; font-size: .9rem; text-align: left; color: var(--ink);
+    background: none; border: 1px solid var(--line-strong); border-radius: .4rem;
+    padding: .6rem .7rem; min-height: 2.75rem; cursor: pointer; width: 100%;
+  }
+  .sheet button.plain:focus-visible,
+  .sheet select:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  .sheet button.plain[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
+  .sheet dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .7rem; margin: 0; font-size: .78rem; color: var(--muted); }
+  .sheet dt { font-weight: 700; }
+  .sheet dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+  /* The rules, inside the menu. A fold so the menu opens on something short. */
+  .rules { border: 0; }
+  .rules > summary { cursor: pointer; font-size: .9rem; font-weight: 700; }
+  .rules > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .rules ul { margin: .6rem 0 0; padding-left: 1.1rem; }
+  .rules li { margin: .35rem 0; font-size: .85rem; line-height: 1.5; }
+
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>GatedSpark</h1>
-  <p class="tagline">A puzzle this page checked for itself before drawing it.</p>
-
-  <div class="controls">
-    <label class="count" for="game-pick">Game</label>
-    <select id="game-pick"></select>
-    <label class="count" for="day-pick">Day</label>
-    <select id="day-pick"></select>
+  <div class="top">
+    <h1>GatedSpark</h1>
+    <span class="day" id="day-short"></span>
+    <!-- Everything that is not the board lives behind this one button: the rules, what
+         is saved on this device, which day to play, and what the page checked before it
+         drew anything. The name says what is in there, because "menu" read out on its
+         own tells somebody nothing. -->
+    <button class="icon-btn menu-btn" id="open-menu" type="button" aria-expanded="false" aria-label="Menu: how to play, saved puzzles, and what this page checked">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
   </div>
-  <p class="saved-line" id="today-line">Looking for today&rsquo;s puzzle&hellip;</p>
-
-  <section class="saved">
-    <p class="saved-line" id="saved-line" role="status" aria-live="polite">Checking what is saved on this device…</p>
-    <div class="controls">
-      <button id="save" type="button">Save this one for later</button>
-      <button id="save-ahead" type="button">Save the next few days</button>
-      <button id="play-saved" type="button">Play a saved one</button>
-      <button id="offline" type="button" aria-pressed="false">Pretend there is no signal</button>
-      <button id="check-withdrawn" type="button">Check for withdrawn puzzles</button>
-    </div>
-  </section>
 
   <p id="refused" class="refused" role="alert" hidden></p>
 
   <div id="game" hidden>
+    <div class="head">
+      <h2 id="game-name"></h2>
+      <p id="today-line" role="status" aria-live="polite">Looking for today&rsquo;s puzzle&hellip;</p>
+    </div>
+
     <!-- The lines that speak to the player are live regions. Without that a screen
          reader never reads them: the text changes and nothing announces it, so the
          solved message, the refusal and the running commentary are seen and not heard.
@@ -353,42 +405,91 @@
          in front of you has gone away. -->
     <p id="solved" class="solved" role="status" aria-live="polite" hidden>Solved. Every clue matches.</p>
 
-    <details class="rules" id="rules">
-      <summary id="rules-title">How to play</summary>
-      <ul id="rules-list"></ul>
-    </details>
-
     <div class="board-scroll">
       <table class="board" id="board"></table>
       <table class="kboard" id="kboard" hidden></table>
       <svg id="loop" hidden xmlns="http://www.w3.org/2000/svg" role="group"></svg>
     </div>
-    <p class="shape" id="shape" role="status" aria-live="polite" hidden></p>
+    <p class="status" id="shape" role="status" aria-live="polite" hidden></p>
 
-    <div class="controls">
-      <button id="undo" type="button">Undo</button>
-      <button id="redo" type="button">Redo</button>
-      <button id="hint" type="button">Hint</button>
-      <span class="count" id="hints-left"></span>
-      <span class="count" id="moves">No moves yet</span>
+    <div class="actions">
+      <button class="act" id="hint" type="button" aria-label="Hint">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5.9 1.1 1 1.7l.1.5h5l.1-.5c.1-.6.4-1.2 1-1.7A6 6 0 0 0 12 3Z"/></svg>
+        <span>Hint</span>
+      </button>
+      <button class="act" id="check" type="button" aria-label="Check my work">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-4.3-7.7"/><path d="m8.5 11.5 3 3L22 4.5"/></svg>
+        <span>Check</span>
+      </button>
+      <button class="act" id="undo" type="button" aria-label="Undo">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h11a5 5 0 0 1 0 10h-5"/><path d="M8 5 4 9l4 4"/></svg>
+        <span>Undo</span>
+      </button>
+      <button class="act" id="redo" type="button" aria-label="Redo">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 9H9a5 5 0 0 0 0 10h5"/><path d="m16 5 4 4-4 4"/></svg>
+        <span>Redo</span>
+      </button>
     </div>
-    <!-- `role="status"` so a screen reader reads a hint out when it arrives. A hint a
-         player cannot hear is not a hint for everybody. Separate from the status line
-         below, which the next tap wipes: a hint is worth reading twice. -->
-    <p id="hint-said" class="hint-said" role="status" aria-live="polite" hidden></p>
-    <p class="note" id="note" role="status" aria-live="polite">Tap once to fill a square, again to cross it out, again to clear it. Crossing out is just for you: the puzzle is done when the filled squares are right.</p>
+    <p class="counts"><span id="hints-left"></span><span id="moves">No moves yet</span></p>
 
-    <section class="trust">
-      <h2>What this page checked</h2>
-      <dl>
-        <dt>Signed by</dt><dd id="signed-by"></dd>
-        <dt>Level</dt><dd id="level"></dd>
-        <dt>Puzzle</dt><dd id="fingerprint"></dd>
-        <dt>Answers</dt><dd id="encoding"></dd>
-      </dl>
-    </section>
+    <!-- `role="status"` so a screen reader reads these out when they arrive. Separate
+         from the note below, which the next tap wipes: a hint and a check are both
+         worth reading twice. Two lines rather than one, because asking for a hint
+         should not wipe the check you just read, or the other way round. -->
+    <p id="hint-said" class="said" role="status" aria-live="polite" hidden></p>
+    <p id="check-said" class="said" role="status" aria-live="polite" hidden></p>
+    <p class="note" id="note" role="status" aria-live="polite"></p>
   </div>
 </main>
+
+<!-- The three games, in reach of a thumb. Each one says its own name, so the bar is
+     not three pictures somebody has to guess at. -->
+<nav class="games" id="game-bar" aria-label="Game"></nav>
+
+<div class="veil" id="veil" hidden></div>
+<aside class="sheet" id="menu" hidden role="dialog" aria-modal="true" aria-labelledby="menu-title">
+  <div class="sheet-top">
+    <h2 id="menu-title">Menu</h2>
+    <button class="icon-btn" id="close-menu" type="button" aria-label="Close menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+
+  <section>
+    <details class="rules" id="rules">
+      <summary id="rules-title">How to play</summary>
+      <ul id="rules-list"></ul>
+    </details>
+  </section>
+
+  <section>
+    <h3><label for="day-pick">Which day</label></h3>
+    <select id="day-pick"></select>
+  </section>
+
+  <section>
+    <h3>On this device</h3>
+    <p class="small" id="saved-line" role="status" aria-live="polite">Checking what is saved on this device…</p>
+    <div class="stack">
+      <button class="plain" id="save" type="button">Save this one for later</button>
+      <button class="plain" id="save-ahead" type="button">Save the next few days</button>
+      <button class="plain" id="play-saved" type="button">Play a saved one</button>
+      <button class="plain" id="offline" type="button" aria-pressed="false">Pretend there is no signal</button>
+      <button class="plain" id="check-withdrawn" type="button">Check for withdrawn puzzles</button>
+    </div>
+  </section>
+
+  <section>
+    <h3>What this page checked</h3>
+    <dl>
+      <dt>Signed by</dt><dd id="signed-by"></dd>
+      <dt>Level</dt><dd id="level"></dd>
+      <dt>Puzzle</dt><dd id="fingerprint"></dd>
+      <dt>Answers</dt><dd id="encoding"></dd>
+    </dl>
+  </section>
+</aside>
+
 
 <script type="module">
 // The page. It draws a board and sends taps to the core; it answers no question about
@@ -563,12 +664,26 @@ function showRules(family) {
   fold.open = !closed;
 }
 
-/** What each game is called, for the picker. One line per game, like HOW_TO above. */
+/** What each game is called, for the bar at the bottom. One line per game. */
 const NAMES = {
   nonogram: "Nonogram",
   slitherlink: "Slitherlink",
   kakuro: "Kakuro",
 };
+
+/** A small picture for each game, drawn from its own board: four blocks, a loop, a
+ *  grid with a diagonal. Beside the name, never instead of it — three pictures with no
+ *  words is three things to guess at. */
+const GAME_ICONS = {
+  nonogram:
+    '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1" fill="currentColor"/><rect x="3" y="14" width="7" height="7" rx="1" fill="currentColor"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  slitherlink: '<path d="M5 5h9v6h5v8H9v-6H5Z" stroke-linejoin="round"/>',
+  kakuro: '<path d="M4 4h16v16H4z"/><path d="M4 4 10 10M10 4h10v6"/><path d="M14 14h2M14 17h4"/>',
+};
+
+/** Which game is on screen. The bar at the bottom sets it; nothing else reads a
+ *  control to find out. */
+let currentFamily = null;
 
 let game = null;
 /** The puzzle on screen, so it can be saved or marked played. */
@@ -577,6 +692,22 @@ let showing = null;
 let page = null;
 /** A switch for trying the offline behaviour without unplugging anything. */
 let pretendOffline = false;
+
+/** Open or close the one menu.
+ *
+ *  Everything that is not the board is in here: the rules, the day, what is saved, and
+ *  what the page checked. It is a dialog, so a screen reader announces it as one and a
+ *  keyboard lands inside it rather than carrying on down the page behind it. */
+function showMenu(open) {
+  el("menu").hidden = !open;
+  el("veil").hidden = !open;
+  el("open-menu").setAttribute("aria-expanded", String(open));
+  if (open) {
+    el("close-menu").focus();
+  } else {
+    el("open-menu").focus();
+  }
+}
 
 function showRefusal(message) {
   el("game").hidden = true;
@@ -769,6 +900,7 @@ function refreshKakuro() {
  *  it comes from. */
 function typeDigit(td, digit) {
   clearHintRing();
+  clearCheckMarks();
   el("note").textContent = game.write_and_say(
     Number(td.dataset.column),
     Number(td.dataset.row),
@@ -905,6 +1037,7 @@ function refreshLoop() {
 
 function tapLine(edge) {
   clearHintRing();
+  clearCheckMarks();
   const side = Number(edge.dataset.side) === Side.Across ? Side.Across : Side.Down;
   const column = Number(edge.dataset.column);
   const row = Number(edge.dataset.row);
@@ -922,6 +1055,58 @@ function clearHintRing() {
   for (const marked of document.querySelectorAll('[data-hint="yes"]')) {
     delete marked.dataset.hint;
   }
+}
+
+/** Stop marking whatever the last check marked.
+ *
+ *  Called wherever the hint ring is cleared, and for the same reason: once the board
+ *  has moved on, a mark left over points at a line that may now be fine. The sentence
+ *  stays until the next check, because a player wants to read it twice. */
+function clearCheckMarks() {
+  for (const marked of document.querySelectorAll('[data-wrong="yes"]')) {
+    delete marked.dataset.wrong;
+  }
+}
+
+/** Ask the core how the board is doing, and mark what it names.
+ *
+ *  **Nothing is worked out here, and nothing is worked out there either.** A check
+ *  counts the player's own marks against the clues printed on the board: a line that
+ *  cannot match its numbers, a square with too many sides drawn, a run already past its
+ *  total. No answer is read, because none is published, and no solver runs.
+ *
+ *  That is why it is free and unlimited while hints are three to a puzzle. A hint tells
+ *  a player something new; a check only tells them what is already in front of them. */
+function askForACheck() {
+  clearCheckMarks();
+  const found = game.check();
+  const said = el("check-said");
+  said.hidden = false;
+  said.textContent = found.says();
+  said.classList.toggle("wrong", !found.clear());
+
+  // Three numbers per place, in the order the core reports them, exactly as a hint's
+  // places are read. The page does not work out which game it is holding.
+  const places = Array.from(found.places());
+  for (let i = 0; i < places.length; i += 3) {
+    const marked = placeOnTheBoard(places[i], places[i + 1], places[i + 2]);
+    if (marked) marked.dataset.wrong = "yes";
+  }
+}
+
+/** The thing on screen at one of the core's places, whichever game is showing. */
+function placeOnTheBoard(kind, row, column) {
+  if (kind === SQUARE) {
+    return el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`);
+  }
+  if (kind === DIGIT) {
+    return el("kboard").querySelector(
+      `td.kcell.white[data-row="${row}"][data-column="${column}"]`
+    );
+  }
+  return el("loop").querySelector(
+    `g.edge[data-side="${kind}"][data-column="${column}"][data-row="${row}"]`
+  );
 }
 
 /** How many hints are left, in the core's count rather than one kept here. */
@@ -944,6 +1129,7 @@ function refreshHintsLeft() {
  *  move count as a whole row. */
 function askForAHint() {
   clearHintRing();
+  clearCheckMarks();
   const said = el("hint-said");
   let hint;
   try {
@@ -968,19 +1154,7 @@ function askForAHint() {
   const places = Array.from(hint.places());
   let first = null;
   for (let i = 0; i < places.length; i += 3) {
-    const kind = places[i];
-    const row = places[i + 1];
-    const column = places[i + 2];
-    const marked =
-      kind === SQUARE
-        ? el("board").querySelector(`td[data-row="${row}"][data-column="${column}"]`)
-        : kind === DIGIT
-          ? el("kboard").querySelector(
-              `td.kcell.white[data-row="${row}"][data-column="${column}"]`
-            )
-          : el("loop").querySelector(
-              `g.edge[data-side="${kind}"][data-column="${column}"][data-row="${row}"]`
-            );
+    const marked = placeOnTheBoard(places[i], places[i + 1], places[i + 2]);
     if (!marked) continue;
     marked.dataset.hint = "yes";
     if (!first) first = marked;
@@ -1060,6 +1234,7 @@ function refresh() {
 
 function tap(td) {
   clearHintRing();
+  clearCheckMarks();
   const row = Number(td.dataset.row);
   const column = Number(td.dataset.column);
   const now = Number(td.dataset.mark);
@@ -1118,10 +1293,19 @@ function showPuzzle(puzzle) {
     el("kboard").replaceChildren();
     drawBoard();
   }
-  // A new puzzle, so a new three hints and no hint on the screen from the last one.
+  // A new puzzle, so a new three hints, and neither the hint nor the check left over
+  // from the last one: both describe a board that is no longer on the screen.
   el("hint-said").hidden = true;
   el("hint-said").textContent = "";
+  el("check-said").hidden = true;
+  el("check-said").textContent = "";
   clearHintRing();
+  clearCheckMarks();
+  // The bar at the bottom follows the puzzle that is actually open, not the other way
+  // round: a puzzle opened by name from the address bar sets it too.
+  currentFamily = family;
+  markCurrentGame();
+  el("game-name").textContent = NAMES[family] ?? family;
   refresh();
   showRules(game.family());
   el("note").textContent = HOW_TO[game.family()] ?? "";
@@ -1263,18 +1447,47 @@ async function fetchSchedule() {
   }
 }
 
-/** Fill the game picker from the schedule. */
+/** Fill the bar of games at the bottom from the schedule.
+ *
+ *  A bar of buttons rather than a drop-down menu: on a phone the games are the thing
+ *  switched most often and a menu costs two taps, the first of which is out of reach of
+ *  a thumb at the top of the screen. Which game is showing is said with
+ *  `aria-current`, so it is not carried by colour alone. */
 function refreshGames() {
   const games = page.scheduled_games();
-  el("game-pick").replaceChildren(
-    ...games.map((family) =>
-      Object.assign(document.createElement("option"), {
-        value: family,
-        textContent: NAMES[family] ?? family,
-      })
-    )
+  el("game-bar").replaceChildren(
+    ...games.map((family) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "game-tab";
+      button.dataset.pick = family;
+      button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${GAME_ICONS[family] ?? ""}</svg>`;
+      button.append(NAMES[family] ?? family);
+      button.addEventListener("click", () => chooseGame(family));
+      return button;
+    })
   );
+  markCurrentGame();
   return games;
+}
+
+/** Say which game is showing, on the bar. */
+function markCurrentGame() {
+  for (const button of el("game-bar").querySelectorAll(".game-tab")) {
+    if (button.dataset.pick === currentFamily) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  }
+}
+
+/** Switch to a game and open its puzzle for today. */
+function chooseGame(family) {
+  currentFamily = family;
+  markCurrentGame();
+  const days = refreshDays(family);
+  if (days.length > 0) void open(days[0].name());
 }
 
 /** Fill the day picker with today and the days before it, and say what today holds.
@@ -1295,15 +1508,28 @@ function refreshDays(family) {
   );
   const line = el("today-line");
   if (days.length === 0) {
-    line.textContent = page.has_schedule()
+    // Said where it can be seen. The date line sits under the game's name, inside the
+    // board, and there is no board when there is no puzzle for today.
+    const why = page.has_schedule()
       ? "The schedule has no puzzle for today for this game yet."
       : "This device has no schedule yet, so there is no puzzle for today. Connect to the internet to get one.";
+    line.textContent = why;
+    showRefusal(why);
   } else {
     line.textContent = `Today is ${days[0].date()}. ${days.length - 1} earlier ${
       days.length === 2 ? "day is" : "days are"
     } in the archive.`;
   }
+  sayWhichDay();
   return days;
+}
+
+/** The short date in the top line, taken from the day picker rather than worked out
+ *  again here. Two places showing a date that could disagree is one too many. */
+function sayWhichDay() {
+  const picker = el("day-pick");
+  const chosen = picker.options[picker.selectedIndex];
+  el("day-short").textContent = chosen ? chosen.textContent.replace(" (today)", "") : "";
 }
 
 /** Download the next few days and keep them on the device.
@@ -1357,11 +1583,19 @@ async function main() {
     return;
   }
 
-  el("game-pick").addEventListener("change", () => {
-    const days = refreshDays(el("game-pick").value);
-    if (days.length > 0) void open(days[0].name());
+  el("day-pick").addEventListener("change", () => {
+    sayWhichDay();
+    void open(el("day-pick").value);
   });
-  el("day-pick").addEventListener("change", () => open(el("day-pick").value));
+
+  el("open-menu").addEventListener("click", () => showMenu(true));
+  el("close-menu").addEventListener("click", () => showMenu(false));
+  el("veil").addEventListener("click", () => showMenu(false));
+  // Escape closes it, which is what a dialog is expected to do and the only way out
+  // for somebody on a keyboard who opened it by mistake.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el("menu").hidden) showMenu(false);
+  });
 
   el("board").addEventListener("click", (event) => {
     const td = event.target.closest("td.square");
@@ -1430,16 +1664,19 @@ async function main() {
     }
   });
   el("hint").addEventListener("click", askForAHint);
+  el("check").addEventListener("click", askForACheck);
   // Undo and redo take the ring off as well. A hint fills squares in, so once those
   // marks are taken back the ring points at squares that are blank again, which would
   // be pointing at nothing.
   el("undo").addEventListener("click", () => {
     clearHintRing();
+    clearCheckMarks();
     el("note").textContent = game.undo() ? "" : "There is nothing left to undo.";
     refresh();
   });
   el("redo").addEventListener("click", () => {
     clearHintRing();
+    clearCheckMarks();
     el("note").textContent = game.redo() ? "" : "There is nothing to redo.";
     refresh();
   });
@@ -1490,7 +1727,7 @@ async function main() {
   refreshSaved();
 
   el("save-ahead").addEventListener("click", () => {
-    void saveAhead(el("game-pick").value);
+    void saveAhead(currentFamily);
   });
 
   refreshSaved();
@@ -1504,7 +1741,11 @@ async function main() {
   // an old day gets looked at directly.
   const wanted = new URLSearchParams(location.search).get("puzzle");
   if (wanted) {
-    if (games.length > 0) refreshDays(games[0]);
+    if (games.length > 0) {
+      currentFamily = games[0];
+      markCurrentGame();
+      refreshDays(currentFamily);
+    }
     await open(wanted);
     return;
   }
@@ -1517,9 +1758,9 @@ async function main() {
     return;
   }
 
-  const family = games[0];
-  el("game-pick").value = family;
-  const days = refreshDays(family);
+  currentFamily = games[0];
+  markCurrentGame();
+  const days = refreshDays(currentFamily);
   if (days.length === 0) return;
   await open(days[0].name());
 }
@@ -1540,17 +1781,18 @@ window.gatedspark = {
   playSaved: () => el("play-saved").click(),
   toggleOffline: () => el("offline").click(),
   todayLine: () => el("today-line").textContent,
-  games: () => Array.from(el("game-pick").options).map((o) => o.value),
+  games: () => Array.from(el("game-bar").querySelectorAll(".game-tab")).map((b) => b.dataset.pick),
+  gameShowing: () =>
+    el("game-bar").querySelector('.game-tab[aria-current="page"]')?.dataset.pick ?? null,
   days: () => Array.from(el("day-pick").options).map((o) => o.textContent),
   chooseGame: (family) => {
-    el("game-pick").value = family;
-    el("game-pick").dispatchEvent(new Event("change"));
+    el("game-bar").querySelector(`.game-tab[data-pick="${family}"]`).click();
   },
   chooseDay: (index) => {
     el("day-pick").selectedIndex = index;
     el("day-pick").dispatchEvent(new Event("change"));
   },
-  saveAhead: () => saveAhead(el("game-pick").value),
+  saveAhead: () => saveAhead(currentFamily),
   scheduleSeen: () => page.schedule_seen(),
   toDownload: (y, m, d, family, most) => page.to_download(y, m, d, family, most),
   checkWithdrawn,
@@ -1655,6 +1897,25 @@ window.gatedspark = {
       Number(td.dataset.column),
       Number(td.dataset.row),
       td.textContent,
+    ]),
+
+  // The one menu. Read off the page, so a check sees what a player sees.
+  menuIsOpen: () => !el("menu").hidden,
+  openMenu: () => el("open-menu").click(),
+  closeMenu: () => el("close-menu").click(),
+  menuSaysItIsOpen: () => el("open-menu").getAttribute("aria-expanded"),
+
+  // Checking your work. Free and unlimited, so there is no allowance to read.
+  check: () => el("check").click(),
+  checkSaid: () => (el("check-said").hidden ? null : el("check-said").textContent),
+  checkIsAnnounced: () =>
+    el("check-said").getAttribute("aria-live") === "polite" &&
+    el("check-said").getAttribute("role") === "status",
+  markedWrong: () => document.querySelectorAll('[data-wrong="yes"]').length,
+  squaresMarkedWrong: () =>
+    Array.from(el("board").querySelectorAll('td.square[data-wrong="yes"]')).map((td) => [
+      Number(td.dataset.row),
+      Number(td.dataset.column),
     ]),
 
   // Hints. Each one reads the page, so a check sees what a player sees rather than

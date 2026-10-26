@@ -244,19 +244,101 @@ fn everything_the_page_says_is_announced_rather_than_only_shown() {
     );
 }
 
-/// Both pickers must say what they are.
+/// Every control must say what it is.
 ///
-/// An unlabelled menu is read out as "menu", which tells somebody choosing between two
-/// of them nothing whatsoever.
+/// An unlabelled drop-down is read out as "menu", and an unlabelled picture button is
+/// read out as "button", neither of which tells anybody anything. This matters more
+/// since the page went over to pictures: four of the controls on the main screen are
+/// now a drawing and a word in a small face, and the word is not the accessible name.
 #[test]
-fn both_pickers_say_what_they_choose() {
+fn every_control_says_what_it_does() {
     let page = page();
-    for id in ["game-pick", "day-pick"] {
+    assert!(
+        page.contains("for=\"day-pick\""),
+        "the day picker has no label, so it is read out as just \"menu\""
+    );
+    for name in ["Hint", "Check my work", "Undo", "Redo"] {
         assert!(
-            page.contains(&format!("for=\"{id}\"")),
-            "`{id}` has no label, so it is read out as just \"menu\""
+            page.contains(&format!("aria-label=\"{name}\"")),
+            "the {name} button is a picture with no name, so it is read out as \"button\""
         );
     }
+    let menu = line_with(&page, "id=\"open-menu\"");
+    assert!(
+        menu.contains("aria-label=") && menu.contains("aria-expanded="),
+        "the menu button must say what it opens and whether it is open: {menu}"
+    );
+    assert!(
+        page.contains("aria-hidden=\"true\""),
+        "the drawings inside the buttons must be hidden from a screen reader, or each \
+         button is read out twice"
+    );
+}
+
+/// The three games are a bar of pictures now. Each one must still carry its own name,
+/// and which one is showing must be said rather than only coloured.
+///
+/// The accent colour marks the game you are on. Colour alone is not a signal: somebody
+/// who cannot see it, or cannot tell those two colours apart, gets nothing from it.
+#[test]
+fn the_bar_of_games_says_which_game_is_showing() {
+    let page = page();
+    let bar = line_with(&page, "id=\"game-bar\"");
+    assert!(
+        bar.contains("aria-label=\"Game\""),
+        "the bar of games has no name of its own: {bar}"
+    );
+    assert!(
+        page.contains("button.append(NAMES[family] ?? family)"),
+        "a game's button no longer carries its name in words"
+    );
+    assert!(
+        page.contains("setAttribute(\"aria-current\", \"page\")"),
+        "which game is showing is carried by colour alone"
+    );
+}
+
+/// The menu holds the rules, the day, what is saved and what the page checked. It has
+/// to behave like a menu for somebody who cannot see it opening.
+#[test]
+fn the_menu_is_a_dialog_with_a_name_and_a_way_out() {
+    let page = page();
+    let menu = line_with(&page, "id=\"menu\"");
+    assert!(
+        menu.contains("role=\"dialog\"") && menu.contains("aria-modal=\"true\""),
+        "the menu is not announced as a dialog, so a screen reader reads straight past \
+         it into the page behind: {menu}"
+    );
+    assert!(
+        menu.contains("aria-labelledby=") || menu.contains("aria-label="),
+        "the menu has no name: {menu}"
+    );
+    assert!(
+        page.contains("event.key === \"Escape\""),
+        "there is no way out of the menu with a keyboard"
+    );
+    assert!(
+        page.contains("el(\"close-menu\").focus()"),
+        "opening the menu does not move the keyboard into it"
+    );
+}
+
+/// Checking your work says what it found out loud, and marks the board with something
+/// other than colour.
+#[test]
+fn a_check_is_announced_and_not_only_coloured() {
+    let page = page();
+    let said = line_with(&page, "id=\"check-said\"");
+    assert!(
+        said.contains("aria-live=\"polite\"") && said.contains("role=\"status\""),
+        "what a check found is shown and never read aloud: {said}"
+    );
+    // The sentence names the lines, so somebody who cannot see the marked squares is
+    // told which row or column to look at rather than left with a colour.
+    assert!(
+        page.contains("found.says()"),
+        "the check shows no sentence, only marks on the board"
+    );
 }
 
 /// The clue numbers must say which row or column they belong to.

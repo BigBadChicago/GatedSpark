@@ -30,6 +30,7 @@
 //!   `Outcome` reaches the publication gate.
 
 pub mod board;
+pub mod check;
 pub mod clues;
 pub mod generate;
 pub mod hint;
